@@ -1,0 +1,59 @@
+# Builds the news page and publishes it to GitHub Pages, twice a day (UK time) or on demand.
+#
+# One-time setup in the repository settings:
+#   Settings > Pages > Build and deployment > Source: "GitHub Actions"
+#   Settings > Secrets and variables > Actions > New repository secret: GEMINI_API_KEY
+#
+# If the build fails (for example no feed can be reached), nothing is published and the
+# previous page stays live.
+name: Publish
+
+on:
+  schedule:
+    # Times are UK local time: GitHub applies the clock changes itself.
+    - cron: "15 7 * * *"
+      timezone: "Europe/London"
+    - cron: "45 17 * * *"
+      timezone: "Europe/London"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false      # an overlapping run waits instead of cutting a publish short
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install -r requirements.txt
+      - name: Build the site
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: python -m plainnews.build
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5
