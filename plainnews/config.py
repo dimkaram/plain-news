@@ -81,6 +81,9 @@ class Config:
     items_per_region: int
     items_in_all: int
     commit_warning_days: int
+    stale_after_hours: int
+    repo_url: str
+    footer_note: str
     default_language: str
     regions: tuple
     label_priority: tuple
@@ -125,6 +128,16 @@ def load_config(path=None) -> Config:
     per_region = _positive_int(errors, "settings.items_per_region", s.get("items_per_region", 5))
     in_all = _positive_int(errors, "settings.items_in_all", s.get("items_in_all", 15))
     warn_days = _positive_int(errors, "settings.commit_warning_days", s.get("commit_warning_days", 45))
+    stale_hours = _positive_int(errors, "settings.stale_after_hours", s.get("stale_after_hours", 24))
+
+    repo_url = site.get("repo_url") or ""
+    if not isinstance(repo_url, str) or (repo_url and not re.match(r"https?://\S+$", repo_url)):
+        errors.append(f"site.repo_url must be an http(s) address or empty (got {repo_url!r})")
+        repo_url = ""
+    footer_note = site.get("footer_note") or ""
+    if not isinstance(footer_note, str):
+        errors.append("site.footer_note must be text (it may be left empty)")
+        footer_note = ""
 
     regions = []
     for i, r in enumerate(raw.get("regions") or []):
@@ -209,6 +222,9 @@ def load_config(path=None) -> Config:
         items_per_region=per_region,
         items_in_all=in_all,
         commit_warning_days=warn_days,
+        stale_after_hours=stale_hours,
+        repo_url=repo_url,
+        footer_note=footer_note.strip(),
         default_language=default_language,
         regions=tuple(regions),
         label_priority=tuple(priority),

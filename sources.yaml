@@ -7,6 +7,8 @@
 site:
   title: "Plain news"
   description: "Static, non-personalised news summaries by region, aggregated from multiple sources."
+  repo_url: "https://github.com/dimkaram/plain-news"   # linked in the footer; leave empty to hide it
+  footer_note: ""              # an optional extra line for the footer
 
 settings:
   timezone: Europe/London      # used for the "last updated" time on the page
@@ -15,6 +17,7 @@ settings:
   items_in_all: 15             # stories shown on the All tab
   commit_warning_days: 45      # warn on the page when the last commit is older
   default_language: en         # language of sources that do not set one
+  stale_after_hours: 24        # flag a source whose newest item is older than this
 
 # Order here is the tab order. When a story appears in several regions, the
 # All tab labels it with the first region listed in label_priority.

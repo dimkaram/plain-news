@@ -75,6 +75,23 @@ sources:
         with self.assertRaises(ConfigError):
             load_config("/nonexistent/sources.yaml")
 
+    def test_page_settings(self):
+        base = """
+regions: [{id: uk, label: UK}]
+sources:
+  - {name: A, region: uk, feed_url: "https://a.example/f", max_items_considered: 5}
+"""
+        cfg = self.load(base)
+        self.assertEqual((cfg.stale_after_hours, cfg.repo_url, cfg.footer_note), (24, "", ""))
+        cfg = self.load('site: {repo_url: "https://github.com/me/plain-news", footer_note: " Hello "}\n'
+                        "settings: {stale_after_hours: 12}\n" + base)
+        self.assertEqual((cfg.stale_after_hours, cfg.repo_url, cfg.footer_note),
+                         (12, "https://github.com/me/plain-news", "Hello"))
+        with self.assertRaises(ConfigError) as ctx:
+            self.load('site: {repo_url: "javascript:alert(1)"}\nsettings: {stale_after_hours: 0}\n' + base)
+        for fragment in ("site.repo_url", "settings.stale_after_hours"):
+            self.assertIn(fragment, str(ctx.exception))
+
     def test_boilerplate_defaults_and_validation(self):
         base = """
 regions: [{id: uk, label: UK}]

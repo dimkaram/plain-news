@@ -187,6 +187,8 @@ def _find_image(entry, base: str) -> str | None:
     if not url:
         return None
     url = urljoin(base, url)
+    if not url.startswith(("http://", "https://")):
+        return None
     # An https page cannot show http images, so ask for the https version.
     return "https://" + url[len("http://"):] if url.startswith("http://") else url
 
@@ -197,6 +199,8 @@ def _normalise(entry, source: Source, rank: int, snippet_chars: int, phrases: tu
     if not title or not link:
         return None
     link = urljoin(source.feed_url, link)
+    if not link.startswith(("http://", "https://")):   # never let a javascript: or data: link onto the page
+        return None
     snippet = _clean_text(entry.get("summary") or entry.get("description"))
     snippet = _truncate(_strip_boilerplate(snippet, phrases), snippet_chars)
     return Item(

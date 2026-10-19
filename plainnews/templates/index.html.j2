@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="{{ lang }}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>{{ site_title }}</title>
+<meta name="description" content="{{ description }}">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#f6f2ea" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#121212" media="(prefers-color-scheme: dark)">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<script>document.documentElement.className += " js";</script>
+<style>
+{{ css|safe }}
+</style>
+</head>
+<body>
+<header class="masthead">
+  <div class="wrap">
+    <h1>{{ site_title }}</h1>
+    <p class="kicker">{{ date_line }} · Updated {{ updated }}{% if note %} · <a class="note" href="#status">{{ note }}</a>{% endif %}</p>
+  </div>
+</header>
+
+<nav class="tabs" aria-label="Sections">
+  <div class="wrap">
+    <div class="tablist" role="tablist">
+{%- for tab in tabs %}
+      <button class="tab" role="tab" id="t-{{ tab.id }}" aria-controls="p-{{ tab.id }}" aria-selected="{{ 'true' if loop.first else 'false' }}" tabindex="{{ 0 if loop.first else -1 }}" type="button">{{ tab.label }}</button>
+{%- endfor %}
+    </div>
+  </div>
+</nav>
+
+<main class="wrap">
+{%- for tab in tabs %}
+  <section class="panel{% if not loop.first %} is-inactive{% endif %}" id="p-{{ tab.id }}" role="tabpanel" aria-labelledby="t-{{ tab.id }}">
+    <h2 class="panel-title">{{ tab.label }}</h2>
+{%- if tab.cards %}
+    <div class="cards">
+{%- for c in tab.cards %}
+      <article class="card"{% if c.lang != lang %} lang="{{ c.lang }}"{% endif %}>
+        <div class="top{% if not c.image %} noimg{% endif %}">
+{%- if c.image %}
+          <a class="thumb" href="{{ c.link }}" tabindex="-1" aria-hidden="true"><img src="{{ c.image }}" alt="" width="120" height="90" loading="lazy" referrerpolicy="no-referrer"></a>
+{%- endif %}
+          <div class="head">
+            <p class="kicker">{% if tab.show_region %}{{ c.region_label }}{% if c.time_iso %} · {% endif %}{% endif %}{% if c.time_iso %}<time datetime="{{ c.time_iso }}">{{ c.time_text }}</time>{% endif %}</p>
+            <h3 class="headline"><a href="{{ c.link }}">{{ c.headline }}</a></h3>
+          </div>
+        </div>
+{%- if c.summary %}
+        <p class="summary">{{ c.summary }}</p>
+{%- endif %}
+        <p class="sources">{% for s in c.sources %}<a href="{{ s.url }}">{{ s.name }}</a>{% if s.paywalled %}<span class="pw" title="Paywalled">paywalled</span>{% endif %}{% if not loop.last %} · {% endif %}{% endfor %}</p>
+      </article>
+{%- endfor %}
+    </div>
+{%- else %}
+    <p class="empty">No stories in this section.</p>
+{%- endif %}
+  </section>
+{%- endfor %}
+
+  <details class="status" id="status">
+    <summary>Status</summary>
+    <p>Updated {{ date_line_plain }}, {{ updated }} (UK time) · {{ status.version_line }}</p>
+{%- if status.warnings %}
+    <h2>Needs attention</h2>
+    <ul class="warn">
+{%- for w in status.warnings %}
+      <li>{{ w }}</li>
+{%- endfor %}
+    </ul>
+{%- endif %}
+    <h2>Sources: {{ status.sources_ok }} of {{ status.sources_total }} working</h2>
+    <table>
+{%- for row in status.sources %}
+      <tr><td>{{ row.region }} · {{ row.name }}</td><td{% if not row.ok or row.stale %} class="bad"{% endif %}>{{ row.detail }}</td></tr>
+{%- endfor %}
+    </table>
+    <h2>Summaries</h2>
+    <ul>
+{%- for r in status.regions %}
+      <li{% if r.fallback %} class="bad"{% endif %}>{{ r.label }}: {{ r.text }}</li>
+{%- endfor %}
+      <li>Left without a summary: {{ status.empty_summaries }} (nothing to add, or removed by the checks)</li>
+    </ul>
+    <h2>Images</h2>
+    <ul><li>{{ status.images_line }}</li></ul>
+  </details>
+</main>
+
+<footer class="footer">
+  <div class="wrap">
+    <p>Headlines, images and links belong to their publishers. Summaries are written by an AI model{% if model %} ({{ model }}){% endif %} from the publishers' headlines and snippets and can contain mistakes, so read the original article. This page sets no cookies, runs no trackers and stores nothing about you.</p>
+{%- if footer_note %}
+    <p>{{ footer_note }}</p>
+{%- endif %}
+    <p>{{ site_title }} {{ version }}{% if repo_url %} · <a href="{{ repo_url }}">Source code</a> · MIT licence{% endif %}</p>
+  </div>
+</footer>
+<script>
+{{ js|safe }}
+</script>
+</body>
+</html>

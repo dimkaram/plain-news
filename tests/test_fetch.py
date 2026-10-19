@@ -65,6 +65,19 @@ BOILER = """<?xml version="1.0" encoding="UTF-8"?>
 <pubDate>Mon, 19 Oct 2026 04:00:00 GMT</pubDate></item>
 </channel></rss>"""
 
+UNSAFE = """<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:media="http://search.yahoo.com/mrss/"><channel><title>t</title>
+<item><title>Script link</title><link>javascript:alert(1)</link>
+<pubDate>Mon, 19 Oct 2026 08:00:00 GMT</pubDate></item>
+<item><title>Data link</title><link>data:text/html,hi</link>
+<pubDate>Mon, 19 Oct 2026 08:00:00 GMT</pubDate></item>
+<item><title>Bad image</title><link>https://pub.example/ok</link>
+<pubDate>Mon, 19 Oct 2026 08:00:00 GMT</pubDate>
+<media:thumbnail url="javascript:alert(2)" width="400"/></item>
+<item><title>Fine</title><link>/relative/path</link>
+<pubDate>Mon, 19 Oct 2026 08:00:00 GMT</pubDate></item>
+</channel></rss>"""
+
 ALL_STALE = """<?xml version="1.0"?><rss version="2.0"><channel><title>t</title>
 <item><title>Ancient</title><link>https://pub.example/x</link>
 <pubDate>Mon, 05 Oct 2026 08:00:00 GMT</pubDate></item></channel></rss>"""
@@ -80,7 +93,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         Handler.hits[self.path] = Handler.hits.get(self.path, 0) + 1
         routes = {"/bbc": BBC_LIKE, "/greek": GREEK, "/enclosure": ENCLOSURE,
-                  "/many": MANY, "/stale": ALL_STALE, "/boiler": BOILER, "/notfeed": "<html>nope</html>"}
+                  "/many": MANY, "/stale": ALL_STALE, "/boiler": BOILER, "/unsafe": UNSAFE, "/notfeed": "<html>nope</html>"}
         if self.path == "/flaky":
             Handler.flaky_state["n"] += 1
             if Handler.flaky_state["n"] == 1:
@@ -197,6 +210,12 @@ class FetchTests(unittest.TestCase):
         _, custom = self.one("/boiler", fetch_extra=", boilerplate: [coast]")
         sea = next(i for i in custom if i.title.startswith("Man dies"))
         self.assertEqual(sea.snippet, "If you need help or support, the Samaritans are available 24/7 on 116 123.")
+
+    def test_only_http_links_and_images_reach_the_page(self):
+        _, items = self.one("/unsafe")
+        self.assertEqual(sorted(i.title for i in items), ["Bad image", "Fine"])      # javascript: and data: links dropped
+        self.assertTrue(all(i.link.startswith("http") for i in items))
+        self.assertIsNone(next(i for i in items if i.title == "Bad image").image_url)
 
     def test_not_a_feed(self):
         result, items = self.one("/notfeed")
