@@ -7,6 +7,7 @@
 # If the build fails (for example no feed can be reached), nothing is published and the
 # previous page stays live.
 name: Publish
+run-name: "Publish (${{ github.event_name }} ${{ github.event.schedule }})"
 
 on:
   schedule:
@@ -29,6 +30,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
+      - name: Report what started this run
+        run: |
+          echo "event:         ${{ github.event_name }}"
+          echo "schedule:      ${{ github.event.schedule }}"
+          echo "now (UTC):     $(date -u '+%Y-%m-%d %H:%M:%S')"
+          echo "now (London):  $(TZ=Europe/London date '+%Y-%m-%d %H:%M:%S %Z')"
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
