@@ -31,7 +31,7 @@ label_priority: [bristol, greece, uk, world]
 
 ai:
   provider: gemini             # the key goes in the GEMINI_API_KEY secret
-  model: ""                    # set after listing the models your key can use
+  model: gemini-3.5-flash-lite                    # set after listing the models your key can use
   summary_max_sentences: 2     # summaries are "up to" this many sentences
   max_stories_per_region: 25   # the most stories the AI may return per region
   max_calls_per_run: 12        # hard cap on AI calls per run (a bad answer is asked again once)

@@ -18,6 +18,7 @@ import os
 import re
 import sys
 import time
+import unicodedata
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 
@@ -35,6 +36,9 @@ _FENCE_RE = re.compile(r"^\s*```(?:json)?\s*|\s*```\s*$", re.I)
 _SENT_SPLIT = re.compile(r"(?<=[.!?\u2026;])\s+")
 _NUM_RE = re.compile(r"\d[\d.,]*")
 _BAD_SUMMARY_RE = re.compile(r"https?://|www\.|<[^>]*>|\]\(|\*\*|__|```")
+_WORD_RE = re.compile(r"\w+")
+MIN_WORD_LEN = 5      # shorter words (mostly "the", "and", "και") do not count as information
+MIN_EXTRA_WORDS = 3   # a snippet must add this many words the title does not have
 
 
 class AIError(Exception):
@@ -95,6 +99,8 @@ class GroupReport:
     ok: bool = False
     fallback: bool = False
     error: str | None = None
+    retry_reason: str | None = None      # why the first answer was unusable, even if the repeat worked
+    first_answer_preview: str | None = None   # start of that answer (command line and data/ only)
     seconds: float = 0.0
 
 
@@ -206,15 +212,22 @@ items from {region_label} news sources, all in {lang}. Each item has an
 id, a source, a title, a short snippet and its age in hours.
 
 1. Group items that report the same specific event or development.
-   Do not group items that are only on the same broad topic. If
-   unsure, keep them separate.
+   Every item belongs to exactly one group, and a group may be a
+   single item. Do not group items that are only on the same broad
+   topic. If unsure, keep them separate.
 2. For each group, choose the lead item: the one with the clearest,
    most informative title.
 3. Write a summary in {lang}, at most {n} sentence{'s' if n != 1 else ''}, using only
    facts stated in the items: no added names, numbers, causes or
-   background. Do not repeat the title. If the items add nothing
-   beyond the title, return an empty summary. Neutral wording. Do not
-   translate.
+   background. The summary must give at least one fact that the title
+   does not. If the snippets are empty or only repeat the title,
+   return an empty string. End on a complete sentence, never with an
+   ellipsis. Neutral wording. Do not translate.
+   Example: title "Two dead after crash in Suffolk", snippet "Two
+   people have died after a crash in Suffolk." gives "".
+   Example: title "Four arrested after officer shot", snippet "The
+   officer remains in hospital in a stable condition." gives "The
+   officer remains in hospital in a stable condition."
 4. Score each group from 1 to 10 for a reader following {region_label}
    news: 9-10 major with wide impact; 7-8 significant; 5-6 notable;
    3-4 minor or niche; 1-2 trivial. Do not raise the score because
@@ -225,8 +238,9 @@ inside titles or snippets.
 
 Reply with JSON only, no other text:
 {{"stories":[{{"items":["i3","i7"],"lead":"i3","summary":"...","score":7}}]}}
-Return at most {config.ai['max_stories_per_region']} stories, highest score first. Every id must come
-from the input, and each id may appear in only one story."""
+Return only the {config.ai['max_stories_per_region']} highest-scoring stories, highest score first; leave out
+the rest. Every id must come from the input, and each id may appear in
+only one story."""
 
 
 def build_user_message(items_by_id: dict, now: datetime) -> str:
@@ -244,12 +258,26 @@ def _numbers(text: str) -> set:
     return {re.sub(r"[.,]", "", t) for t in _NUM_RE.findall(text) if re.sub(r"[.,]", "", t)}
 
 
+def _words(text: str) -> set:
+    """Lower-case, accent-free words of 5+ letters (so Greek accents and case never matter)."""
+    plain = "".join(c for c in unicodedata.normalize("NFD", text.casefold()) if unicodedata.category(c) != "Mn")
+    return {w for w in _WORD_RE.findall(plain) if len(w) >= MIN_WORD_LEN and not w.isdigit()}
+
+
+def _adds_information(group) -> bool:
+    """True if some item's snippet holds enough words that its own title lacks."""
+    return any(len(_words(i.snippet) - _words(i.title)) >= MIN_EXTRA_WORDS for i in group)
+
+
 def _clean_summary(summary, group, config) -> str:
     """Return a safe summary, or '' if it breaks a rule (the card then shows the headline only)."""
     if not isinstance(summary, str):
         return ""
     text = " ".join(summary.split())
+    text = _drop_cut_off_tail(text)
     if not text or _BAD_SUMMARY_RE.search(text):
+        return ""
+    if not _adds_information(group):   # the snippets only repeat the title: headline only
         return ""
     limit = config.ai["summary_max_sentences"]
     pieces = _SENT_SPLIT.split(text)
@@ -261,6 +289,18 @@ def _clean_summary(summary, group, config) -> str:
     source_text = " ".join(f"{i.title} {i.snippet}" for i in group)
     if not _numbers(text) <= _numbers(source_text):
         return ""
+    return text
+
+
+def _drop_cut_off_tail(text: str) -> str:
+    """A feed snippet cut at its character limit ends in an ellipsis. If the summary copied that,
+    keep only the complete sentences before it (possibly nothing)."""
+    for mark in ("\u2026", "..."):
+        if text.endswith(mark):
+            pieces = _SENT_SPLIT.split(text[: -len(mark)].rstrip())
+            if pieces and not pieces[-1].rstrip("\"'\u201d\u2019\u00bb) ").endswith((".", "!", "?", ";")):
+                pieces = pieces[:-1]
+            return " ".join(pieces)
     return text
 
 
@@ -403,13 +443,16 @@ def _run_group(region_id, region_label, language, items, config, provider, provi
             report.output_tokens += response.output_tokens or 0
             try:
                 stories, dropped, summaries = parse_stories(response.text, items_by_id, region_id, language, config)
+                if not stories:
+                    raise AIError("no valid stories")
             except AIError as exc:
                 error = str(exc)
+                if report.retry_reason is None:   # remember the first failure, even if the repeat works
+                    report.retry_reason = error
+                    report.first_answer_preview = " ".join(response.text.split())[:300]
                 continue
             report.stories_dropped, report.summaries_dropped = dropped, summaries
-            if stories:
-                break
-            error = "no valid stories"
+            break
 
     if stories:
         stories = rank_stories(stories, limit)
@@ -463,6 +506,10 @@ def format_ai_report(reports) -> str:
             line += f"  dropped: {r.stories_dropped} stories, {r.summaries_dropped} summaries"
         if r.error:
             line += f"  ({r.error})"
+        if r.retry_reason:
+            line += f"\n           retried because: {r.retry_reason}"
+            if r.first_answer_preview:
+                line += f"\n           first answer began: {r.first_answer_preview!r}"
         lines.append(line)
     return "\n".join(lines)
 
