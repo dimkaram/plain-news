@@ -1,0 +1,171 @@
+# plain-news configuration
+#
+# Edit this file to add, remove or tune sources. No code changes needed.
+# The update schedule is NOT here: GitHub reads it from
+# .github/workflows/ (see the README, "Changing the schedule").
+
+site:
+  title: "Plain news"
+  description: "Static, non-personalised news summaries by region, aggregated from multiple sources."
+
+settings:
+  timezone: Europe/London      # used for the "last updated" time on the page
+  max_age_hours: 48            # ignore feed items older than this
+  items_per_region: 5          # stories shown on each region tab
+  items_in_all: 15             # stories shown on the All tab
+  commit_warning_days: 45      # warn on the page when the last commit is older
+  default_language: en         # language of sources that do not set one
+
+# Order here is the tab order. When a story appears in several regions, the
+# All tab labels it with the first region listed in label_priority.
+regions:
+  - id: world
+    label: World
+  - id: uk
+    label: UK
+  - id: greece
+    label: Greece
+  - id: bristol
+    label: Bristol
+label_priority: [bristol, greece, uk, world]
+
+ai:
+  provider: github-models      # OpenAI-compatible API; change provider here
+  model: ""                    # TODO: choose after testing Greek quality
+  max_calls_per_run: 8         # one call per region, plus spare for retries
+  max_input_tokens_per_call: 7000   # the free tier allows about 8000
+
+# DRAFT wording, one rule for all regions. Sent to the AI as instructions.
+topic_rule: |
+  Prioritise mainstream news: politics, government, the economy, world events,
+  major incidents and disasters, public services, and significant local
+  matters. Local life is also welcome: community news, local events and
+  "what's on" listings. Sports, technology, entertainment and lifestyle
+  stories are allowed when they are widely newsworthy, but hard news always
+  ranks above them. Exclude celebrity gossip, horoscopes, name-day listings,
+  shopping deals and purely promotional content.
+
+images:
+  og_image_fallback: true      # read the article page's og:image if the feed has none
+  max_page_fetches_per_run: 40
+  timeout_seconds: 8
+
+fetch:
+  timeout_seconds: 20
+  retries: 3
+
+# Per source:
+#   max_items_considered  how many of the feed's items the AI gets to see.
+#                         Newest-first feeds (Guardian, Mail, DW) need more.
+#   language              optional; defaults to settings.default_language.
+#                         Summaries are written in this language, and stories
+#                         are only merged within the same language.
+#   paywalled             optional (default false); true flags the card and
+#                         shows headline and link only
+#   enabled               false keeps the source here but skips it
+sources:
+
+  # ---- UK ----
+  - name: BBC News
+    region: uk
+    feed_url: https://feeds.bbci.co.uk/news/uk/rss.xml
+    max_items_considered: 15
+    enabled: true
+
+  - name: Sky News
+    region: uk
+    feed_url: https://feeds.skynews.com/feeds/rss/uk.xml
+    max_items_considered: 10
+    enabled: true
+
+  - name: The Guardian
+    region: uk
+    feed_url: https://www.theguardian.com/uk/rss
+    max_items_considered: 25
+    enabled: true
+
+  - name: Daily Mail
+    region: uk
+    feed_url: https://www.dailymail.co.uk/news/index.rss   # redirects to dailymail.com
+    max_items_considered: 25
+    enabled: true
+
+  # ---- Greece (Greek language; one source per owner) ----
+  - name: Skai
+    region: greece
+    language: el
+    feed_url: https://www.skai.gr/feed.xml
+    max_items_considered: 15
+    enabled: true
+
+  - name: To Vima
+    region: greece
+    language: el
+    feed_url: https://www.tovima.gr/feed
+    max_items_considered: 15
+    enabled: true
+
+  - name: ERT News
+    region: greece
+    language: el
+    feed_url: https://www.ertnews.gr/feed/
+    max_items_considered: 15
+    enabled: true
+
+  # Disabled fallback for Skai (same owner). Feed is a FeedBurner address.
+  - name: Kathimerini
+    region: greece
+    language: el
+    feed_url: https://feeds.feedburner.com/kathimerini/DJpy
+    max_items_considered: 15
+    enabled: false
+
+  # ---- Bristol ----
+  - name: BBC Bristol
+    region: bristol
+    feed_url: https://feeds.bbci.co.uk/news/england/bristol/rss.xml
+    max_items_considered: 10
+    enabled: true
+
+  - name: Bristol Post
+    region: bristol
+    feed_url: https://www.bristolpost.co.uk/?service=rss
+    max_items_considered: 15
+    enabled: true
+
+  - name: Bristol24/7
+    region: bristol
+    feed_url: https://www.bristol247.com/feed/
+    max_items_considered: 10
+    enabled: true
+
+  # ---- World ----
+  - name: BBC News
+    region: world
+    feed_url: https://feeds.bbci.co.uk/news/world/rss.xml
+    max_items_considered: 15
+    enabled: true
+
+  - name: The Guardian
+    region: world
+    feed_url: https://www.theguardian.com/world/rss
+    max_items_considered: 25
+    enabled: true
+
+  - name: Al Jazeera English
+    region: world
+    feed_url: https://www.aljazeera.com/xml/rss/all.xml
+    max_items_considered: 20
+    enabled: true
+
+  - name: DW (English)
+    region: world
+    feed_url: https://rss.dw.com/xml/rss-en-world
+    max_items_considered: 11
+    enabled: true
+
+  - name: NBC News
+    region: world
+    feed_url: https://feeds.nbcnews.com/nbcnews/public/news
+    max_items_considered: 15
+    enabled: true
