@@ -64,10 +64,21 @@ def _components(stories) -> list:
 
 
 def _merge(versions: list, config: Config) -> Story:
-    """One card from several versions of the same event: the most specific region's headline, summary and
-    label; every source link; the highest score."""
+    """One card from several versions of the same event.
+
+    The version that scored highest leads, because each region scores a story for its own reader, so the
+    top score marks where the story matters most. Its headline, summary and label are used. A tie goes to
+    the most specific region (label_priority). The card lists every source link and keeps the top score.
+    """
     priority = {region: n for n, region in enumerate(config.label_priority)}
-    ranked = [s for _, s in sorted(enumerate(versions), key=lambda e: (priority.get(e[1].region, 99), _rank_key(e)))]
+
+    def lead_key(entry):
+        index, story = entry
+        if story.score is None:                       # a raw-headline version never leads a scored one
+            return (1, 0, priority.get(story.region, 99), index)
+        return (0, -story.score, priority.get(story.region, 99), _rank_key(entry))
+
+    ranked = [s for _, s in sorted(enumerate(versions), key=lead_key)]
     lead = ranked[0]
 
     items, seen = [], set()

@@ -62,7 +62,7 @@ class AllTabTests(unittest.TestCase):
     def setUp(self):
         self.cfg = make_config()
 
-    def test_same_event_in_two_regions_is_one_card_from_the_most_specific_region(self):
+    def test_same_event_in_two_regions_is_one_card_from_the_version_that_scored_highest(self):
         world = st("world", "France curfews (world)", ["bbc-fr", "gdn-fr"], 10, sources=["BBC", "Guardian"],
                    summary="World summary.", image="https://img/w.jpg")
         uk = st("uk", "France curfews (uk)", ["bbc-fr", "mail-fr"], 8, sources=["BBC", "Daily Mail"],
@@ -70,19 +70,36 @@ class AllTabTests(unittest.TestCase):
         cards = all_tab([world, uk], self.cfg)
         self.assertEqual(len(cards), 1)
         card = cards[0]
-        self.assertEqual((card.region, card.headline, card.summary), ("uk", "France curfews (uk)", "UK summary."))
-        self.assertEqual(card.score, 10)                                       # the highest score wins
-        self.assertEqual(card.sources, ["BBC", "Daily Mail", "Guardian"])      # every source, no repeats
-        self.assertEqual([i.link for i in card.items], ["bbc-fr", "mail-fr", "gdn-fr"])
-        self.assertEqual(card.image_url, "https://img/w.jpg")                  # borrowed: the uk version had none
+        self.assertEqual((card.region, card.headline, card.summary), ("world", "France curfews (world)", "World summary."))
+        self.assertEqual(card.score, 10)
+        self.assertEqual(card.sources, ["BBC", "Guardian", "Daily Mail"])      # every source, no repeats
+        self.assertEqual([i.link for i in card.items], ["bbc-fr", "gdn-fr", "mail-fr"])
+        self.assertEqual(card.image_url, "https://img/w.jpg")
 
-    def test_bristol_beats_uk_and_matching_is_transitive(self):
-        uk = st("uk", "uk version", ["a", "b"], 7)
-        bristol = st("bristol", "bristol version", ["b", "c"], 5)
+    def test_a_foreign_story_in_a_uk_feed_keeps_its_world_label(self):
+        """The Australian MP case: the UK version scored low, the World version high."""
+        uk = st("uk", "Deeply appalled: politicians condemn attack", ["gdn-au"], 7, sources=["Guardian"])
+        world = st("world", "Australian MP critically injured in car ramming", ["gdn-au", "bbc-au", "aj-au"], 10,
+                   sources=["Guardian", "BBC", "Al Jazeera"])
+        card = all_tab([uk, world], self.cfg)[0]
+        self.assertEqual((card.region, card.headline), ("world", "Australian MP critically injured in car ramming"))
+
+    def test_a_tie_goes_to_the_most_specific_region(self):
+        uk = st("uk", "uk version", ["a", "b"], 6)
+        bristol = st("bristol", "bristol version", ["b", "c"], 6)
         world = st("world", "world version", ["c", "d"], 6)
-        cards = all_tab([uk, bristol, world], self.cfg)
-        self.assertEqual([(c.region, c.headline, c.score) for c in cards], [("bristol", "bristol version", 7)])
+        cards = all_tab([uk, bristol, world], self.cfg)                  # matching is transitive: one card
+        self.assertEqual([(c.region, c.headline, c.score) for c in cards], [("bristol", "bristol version", 6)])
         self.assertEqual(sorted(i.link for i in cards[0].items), ["a", "b", "c", "d"])
+        uk2 = st("uk", "uk v", ["m", "n"], 6)
+        world2 = st("world", "world v", ["n", "o"], 6)
+        self.assertEqual([c.region for c in all_tab([world2, uk2], self.cfg)], ["uk"])   # input order is irrelevant
+        self.assertEqual([c.region for c in all_tab([uk2, world2], self.cfg)], ["uk"])
+
+    def test_a_local_story_that_scores_highest_at_home_keeps_its_local_label(self):
+        bristol = st("bristol", "bristol version", ["x"], 8)
+        uk = st("uk", "uk version", ["x", "y"], 6)
+        self.assertEqual(all_tab([uk, bristol], self.cfg)[0].region, "bristol")
 
     def test_languages_do_not_merge_without_a_shared_link(self):
         english = st("world", "France riots", ["bbc-fr"], 9)
@@ -110,7 +127,7 @@ class AllTabTests(unittest.TestCase):
         raw = st("greece", "raw version", ["x"], None, language="el", fallback=True)
         scored = st("world", "scored version", ["x"], 6)
         card = all_tab([raw, scored], self.cfg)[0]
-        self.assertEqual((card.region, card.score, card.fallback), ("greece", 6, False))
+        self.assertEqual((card.region, card.headline, card.score, card.fallback), ("world", "scored version", 6, False))
 
     def test_inputs_are_not_modified(self):
         world = st("world", "w", ["x", "y"], 9, sources=["A", "B"])
