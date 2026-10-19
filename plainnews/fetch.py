@@ -12,6 +12,7 @@ import json
 import re
 import sys
 import time
+import unicodedata
 from calendar import timegm
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
@@ -25,6 +26,9 @@ from tenacity import Retrying, retry_if_exception_type, stop_after_attempt, wait
 from .config import ROOT, Config, Source, load_config
 
 _TAG_RE = re.compile(r"<[^>]+>")
+_SENTENCE_RE = re.compile(r"(?<=[.!?\u2026;])\s+")
+# zero-width characters, direction marks, the byte-order mark and soft hyphens: invisible, never wanted
+_INVISIBLE = dict.fromkeys(map(ord, "\u200b\u200c\u200d\u200e\u200f\u2060\ufeff\u00ad"), None)
 _SPACE_RE = re.compile(r"\s+")
 _IMG_RE = re.compile(r"""<img\b[^>]*?\bsrc\s*=\s*["']([^"']+)["']""", re.I)
 _IMAGE_EXT_RE = re.compile(r"\.(jpe?g|png|webp|gif|avif)(\?|$)", re.I)
@@ -99,7 +103,26 @@ def _download(url: str, cfg: dict) -> requests.Response:
 def _clean_text(value) -> str:
     if not value:
         return ""
-    return _SPACE_RE.sub(" ", html.unescape(_TAG_RE.sub(" ", str(value)))).strip()
+    text = html.unescape(_TAG_RE.sub(" ", str(value))).translate(_INVISIBLE)
+    return _SPACE_RE.sub(" ", text).strip()
+
+
+def _fold(text: str) -> str:
+    """Lower-case and accent-free, so Greek accents and capitals never matter."""
+    decomposed = unicodedata.normalize("NFD", text.casefold())
+    return "".join(c for c in decomposed if unicodedata.category(c) != "Mn")
+
+
+def _prepare_phrases(phrases) -> tuple:
+    return tuple(p for p in (_fold(str(x).strip()) for x in phrases) if p)
+
+
+def _strip_boilerplate(text: str, phrases: tuple) -> str:
+    """Remove every sentence that contains one of the boilerplate phrases."""
+    if not text or not phrases:
+        return text
+    kept = [s for s in _SENTENCE_RE.split(text) if not any(p in _fold(s) for p in phrases)]
+    return " ".join(kept)
 
 
 def _truncate(text: str, limit: int) -> str:
@@ -168,13 +191,14 @@ def _find_image(entry, base: str) -> str | None:
     return "https://" + url[len("http://"):] if url.startswith("http://") else url
 
 
-def _normalise(entry, source: Source, rank: int, snippet_chars: int) -> Item | None:
+def _normalise(entry, source: Source, rank: int, snippet_chars: int, phrases: tuple = ()) -> Item | None:
     title = _clean_text(entry.get("title"))
     link = (entry.get("link") or "").strip()
     if not title or not link:
         return None
     link = urljoin(source.feed_url, link)
-    snippet = _truncate(_clean_text(entry.get("summary") or entry.get("description")), snippet_chars)
+    snippet = _clean_text(entry.get("summary") or entry.get("description"))
+    snippet = _truncate(_strip_boilerplate(snippet, phrases), snippet_chars)
     return Item(
         title=title,
         link=link,
@@ -209,7 +233,8 @@ def fetch_feed(source: Source, config: Config, now: datetime):
             return result, items
 
         chars = int(config.fetch["snippet_chars"])
-        normalised = [i for i in (_normalise(e, source, rank, chars) for rank, e in enumerate(entries)) if i]
+        phrases = _prepare_phrases(config.fetch["boilerplate"])
+        normalised = [i for i in (_normalise(e, source, rank, chars, phrases) for rank, e in enumerate(entries)) if i]
         dates = [i.published for i in normalised if i.published]
         if dates:
             result.newest_age_hours = round((now - max(dates)).total_seconds() / 3600, 1)

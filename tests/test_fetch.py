@@ -46,6 +46,25 @@ MANY = """<?xml version="1.0"?><rss version="2.0"><channel><title>t</title>""" +
     f"<pubDate>Mon, 19 Oct 2026 0{9 - n}:00:00 GMT</pubDate></item>" for n in range(1, 6)
 ) + "</channel></rss>"
 
+BOILER = """<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel><title>t</title>
+<item><title>Man dies after incident at Sea Wall</title><link>https://pub.example/1</link>
+<description>A man has died following an incident on the coast. If you need help or support, the Samaritans are available 24/7 on 116 123.</description>
+<pubDate>Mon, 19 Oct 2026 08:00:00 GMT</pubDate></item>
+<item><title>Crash between two cars</title><link>https://pub.example/2</link>
+<description>Police want anyone with information to get in touch.</description>
+<pubDate>Mon, 19 Oct 2026 07:00:00 GMT</pubDate></item>
+<item><title>Council approves new budget</title><link>https://pub.example/3</link>
+<description>The budget passed on Monday. The post Council approves new budget appeared first on Local News.</description>
+<pubDate>Mon, 19 Oct 2026 06:00:00 GMT</pubDate></item>
+<item><title>Ελληνική είδηση</title><link>https://pub.example/4</link>
+<description>Η είδηση έγινε γνωστή το πρωί. ΔΙΑΒΆΣΤΕ ΠΕΡΙΣΣΌΤΕΡΑ στο site μας.</description>
+<pubDate>Mon, 19 Oct 2026 05:00:00 GMT</pubDate></item>
+<item><title>WFP cuts aid to \u200b500,000 Palestinians</title><link>https://pub.example/5</link>
+<description>Aid will drop by a third,\u200b from 1.6 million to 1.1 million.\ufeff</description>
+<pubDate>Mon, 19 Oct 2026 04:00:00 GMT</pubDate></item>
+</channel></rss>"""
+
 ALL_STALE = """<?xml version="1.0"?><rss version="2.0"><channel><title>t</title>
 <item><title>Ancient</title><link>https://pub.example/x</link>
 <pubDate>Mon, 05 Oct 2026 08:00:00 GMT</pubDate></item></channel></rss>"""
@@ -61,7 +80,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         Handler.hits[self.path] = Handler.hits.get(self.path, 0) + 1
         routes = {"/bbc": BBC_LIKE, "/greek": GREEK, "/enclosure": ENCLOSURE,
-                  "/many": MANY, "/stale": ALL_STALE, "/notfeed": "<html>nope</html>"}
+                  "/many": MANY, "/stale": ALL_STALE, "/boiler": BOILER, "/notfeed": "<html>nope</html>"}
         if self.path == "/flaky":
             Handler.flaky_state["n"] += 1
             if Handler.flaky_state["n"] == 1:
@@ -83,9 +102,9 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
 
-def make_config(base, sources):
+def make_config(base, sources, fetch_extra=""):
     lines = ["regions:", "  - {id: uk, label: UK}", "  - {id: greece, label: Greece}",
-             'topic_rule: "x"', "fetch: {retries: 3, backoff_seconds: 0.01, timeout_seconds: 5}",
+             'topic_rule: "x"', f"fetch: {{retries: 3, backoff_seconds: 0.01, timeout_seconds: 5{fetch_extra}}}",
              "sources:"]
     for name, path, extra in sources:
         lines.append(f'  - {{name: "{name}", region: uk, feed_url: "{base}{path}", {extra}}}')
@@ -110,8 +129,8 @@ class FetchTests(unittest.TestCase):
         Handler.hits.clear()
         Handler.flaky_state["n"] = 0
 
-    def one(self, path, extra="max_items_considered: 10", language="en"):
-        cfg = make_config(self.base, [("Test", path, extra)])
+    def one(self, path, extra="max_items_considered: 10", language="en", fetch_extra=""):
+        cfg = make_config(self.base, [("Test", path, extra)], fetch_extra)
         source = cfg.sources[0]
         if language != "en":
             source = type(source)(**{**source.__dict__, "language": language})
@@ -154,6 +173,30 @@ class FetchTests(unittest.TestCase):
         self.assertEqual([i.title for i in items], ["Story 1", "Story 2", "Story 3"])
         self.assertEqual([i.rank for i in items], [0, 1, 2])
         self.assertEqual(result.items_kept, 3)
+
+
+    def test_boilerplate_sentences_are_removed_from_snippets(self):
+        _, items = self.one("/boiler", language="el")
+        by_title = {i.title: i for i in items}
+        self.assertEqual(by_title["Man dies after incident at Sea Wall"].snippet,
+                         "A man has died following an incident on the coast.")       # support-line notice gone
+        self.assertEqual(by_title["Crash between two cars"].snippet, "")             # appeal gone, nothing left
+        self.assertEqual(by_title["Council approves new budget"].snippet, "The budget passed on Monday.")
+        self.assertEqual(by_title["Ελληνική είδηση"].snippet, "Η είδηση έγινε γνωστή το πρωί.")  # accents and case ignored
+
+    def test_invisible_characters_are_removed_everywhere(self):
+        _, items = self.one("/boiler")
+        wfp = next(i for i in items if i.title.startswith("WFP"))
+        self.assertEqual(wfp.title, "WFP cuts aid to 500,000 Palestinians")
+        self.assertEqual(wfp.snippet, "Aid will drop by a third, from 1.6 million to 1.1 million.")
+
+    def test_the_phrase_list_can_be_replaced_or_switched_off(self):
+        _, off = self.one("/boiler", fetch_extra=", boilerplate: []")
+        sea = next(i for i in off if i.title.startswith("Man dies"))
+        self.assertIn("Samaritans", sea.snippet)                                      # nothing removed
+        _, custom = self.one("/boiler", fetch_extra=", boilerplate: [coast]")
+        sea = next(i for i in custom if i.title.startswith("Man dies"))
+        self.assertEqual(sea.snippet, "If you need help or support, the Samaritans are available 24/7 on 116 123.")
 
     def test_not_a_feed(self):
         result, items = self.one("/notfeed")

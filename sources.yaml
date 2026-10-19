@@ -49,6 +49,33 @@ fetch:
   timeout_seconds: 20
   retries: 3
   snippet_chars: 300         # how much of each item's snippet the AI sees
+  # Sentences containing any of these phrases are removed from snippets before the AI sees
+  # them (ignoring case and accents): support-line notices, appeals, promotional lines.
+  # Setting this list replaces the built-in one; an empty list ([]) turns the filter off.
+  boilerplate:
+    - samaritans
+    - helpline
+    - if you need help
+    - if you are affected by
+    - get in touch
+    - subscribe to
+    - subscribe now
+    - newsletter
+    - read more
+    - click here
+    - continue reading
+    - follow us
+    - all rights reserved
+    - appeared first on
+    - download the app
+    - διαβάστε περισσότερα
+    - δείτε περισσότερα
+    - μάθετε περισσότερα
+    - διαβάστε επίσης
+    - ακολουθήστε μας
+    - εγγραφείτε
+    - εμφανίστηκε πρώτα
+    - γραμμή βοήθειας
 
 # Per source:
 #   max_items_considered  how many of the feed's items the AI gets to see.

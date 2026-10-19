@@ -29,12 +29,23 @@ IMAGE_DEFAULTS = {
     "max_page_fetches_per_run": 40,
     "timeout_seconds": 8,
 }
+# Sentences containing any of these (ignoring case and accents) are removed from snippets before the AI
+# sees them: support-line notices, appeals, promotional lines and feed boilerplate.
+DEFAULT_BOILERPLATE = (
+    "samaritans", "helpline", "if you need help", "if you are affected by", "get in touch",
+    "subscribe to", "subscribe now", "newsletter", "read more", "click here", "continue reading",
+    "follow us", "all rights reserved", "appeared first on", "download the app",
+    "διαβάστε περισσότερα", "δείτε περισσότερα", "μάθετε περισσότερα", "διαβάστε επίσης",
+    "ακολουθήστε μας", "εγγραφείτε", "εμφανίστηκε πρώτα", "γραμμή βοήθειας",
+)
+
 FETCH_DEFAULTS = {
     "timeout_seconds": 20,
     "retries": 3,
     "backoff_seconds": 1,
     "max_workers": 6,
     "snippet_chars": 300,
+    "boilerplate": list(DEFAULT_BOILERPLATE),
     "user_agent": "Mozilla/5.0 (compatible; plain-news/0.1)",
 }
 
@@ -136,6 +147,12 @@ def load_config(path=None) -> Config:
         errors.append("extra_rules must be text (it may be left empty)")
         extra_rules = ""
 
+    fetch = {**FETCH_DEFAULTS, **(raw.get("fetch") or {})}
+    phrases = fetch["boilerplate"]
+    if not isinstance(phrases, list) or not all(isinstance(x, str) and x.strip() for x in phrases):
+        errors.append("fetch.boilerplate must be a list of non-empty phrases (an empty list turns it off)")
+        fetch["boilerplate"] = []
+
     ai = {**AI_DEFAULTS, **(raw.get("ai") or {})}
     for key in ("summary_max_sentences", "max_stories_per_region", "max_calls_per_run",
                 "max_output_tokens", "timeout_seconds", "retries"):
@@ -194,6 +211,6 @@ def load_config(path=None) -> Config:
         ai=ai,
         extra_rules=extra_rules.strip(),
         images={**IMAGE_DEFAULTS, **(raw.get("images") or {})},
-        fetch={**FETCH_DEFAULTS, **(raw.get("fetch") or {})},
+        fetch=fetch,
         sources=tuple(sources),
     )

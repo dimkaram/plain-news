@@ -31,6 +31,7 @@ class RealConfigTests(unittest.TestCase):
     def test_runtime_defaults(self):
         self.assertEqual(self.cfg.fetch["retries"], 3)
         self.assertEqual(self.cfg.fetch["snippet_chars"], 300)
+        self.assertTrue(self.cfg.fetch["boilerplate"])        # never empty unless you turn it off
         self.assertTrue(self.cfg.images["og_image_fallback"])
         self.assertEqual(self.cfg.items_in_all, 15)
 
@@ -72,6 +73,20 @@ sources:
     def test_missing_file(self):
         with self.assertRaises(ConfigError):
             load_config("/nonexistent/sources.yaml")
+
+    def test_boilerplate_defaults_and_validation(self):
+        base = """
+regions: [{id: uk, label: UK}]
+sources:
+  - {name: A, region: uk, feed_url: "https://a.example/f", max_items_considered: 5}
+"""
+        cfg = self.load(base)
+        self.assertIn("samaritans", cfg.fetch["boilerplate"])
+        self.assertIn("εμφανίστηκε πρώτα", cfg.fetch["boilerplate"])
+        self.assertEqual(self.load(base + "fetch: {boilerplate: []}\n").fetch["boilerplate"], [])
+        with self.assertRaises(ConfigError) as ctx:
+            self.load(base + "fetch: {boilerplate: oops}\n")
+        self.assertIn("fetch.boilerplate", str(ctx.exception))
 
     def test_bad_ai_settings_are_reported(self):
         text = """
