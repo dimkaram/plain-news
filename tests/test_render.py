@@ -219,7 +219,8 @@ class StatusAndFooterTests(unittest.TestCase):
     def test_footer_names_the_model_and_hides_the_repo_link_until_it_is_set(self):
         html, _ = page(make_config(model="gemini-3.5-flash-lite"))
         self.assertIn("AI model (gemini-3.5-flash-lite)", html)
-        self.assertIn("sets no cookies, runs no trackers", html)
+        self.assertIn("Thumbnails load directly from the publishers' servers.", html)
+        self.assertIn("This page itself sets no cookies, runs no trackers and stores nothing about you.", html)
         self.assertNotIn("Source code", html)
         html, _ = page(make_config(', repo_url: "https://github.com/me/plain-news", footer_note: "Contact <me>"'))
         self.assertIn('<a href="https://github.com/me/plain-news">Source code</a> · MIT licence', html)
