@@ -8,8 +8,9 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from unittest import mock
 
-from plainnews.ai import (AIError, GeminiProvider, LLMResponse, build_system_prompt, build_user_message,
-                          fallback_stories, format_ai_report, parse_stories, rank_stories, run_ai)
+from plainnews.ai import (STORIES_SCHEMA, AIError, GeminiProvider, LLMResponse, build_system_prompt, build_user_message, coverage,
+                          fallback_stories, format_ai_report, format_coverage, parse_stories, rank_stories,
+                          run_ai, write_debug)
 from plainnews.config import load_config
 from plainnews.fetch import Item
 
@@ -54,9 +55,11 @@ class Stub:
     def __init__(self, replies):
         self.replies = list(replies)
         self.calls = []
+        self.schemas = []
 
-    def generate(self, system, user):
+    def generate(self, system, user, schema=None):
         self.calls.append((system, user))
+        self.schemas.append(schema)
         reply = self.replies.pop(0)
         if isinstance(reply, Exception):
             raise reply
@@ -412,6 +415,98 @@ class RetryDiagnosticsTests(unittest.TestCase):
         self.assertEqual((r.error, r.retry_reason, r.first_answer_preview), ("HTTP 429", None, None))
 
 
+class DebugTests(unittest.TestCase):
+    def setUp(self):
+        self.cfg = make_config()
+        self.items = [mk("BBC", "Story one", rank=0), mk("BBC", "Story two", rank=1),
+                      mk("Sky", "Story three", rank=0), mk("Sky", "Story four", rank=1)]
+        self.reply = answer({"items": ["i1", "i3"], "lead": "i1", "summary": "", "score": 6})
+
+    def run_debug(self):
+        debug = {}
+        result = run_ai(self.items, self.cfg, provider=Stub([self.reply]), now=NOW, debug=debug)
+        return result, debug
+
+    def test_debug_is_off_by_default_and_captures_when_asked(self):
+        result = run_ai(self.items, self.cfg, provider=Stub([self.reply]), now=NOW)   # no sink: still fine
+        self.assertEqual(len(result.stories), 1)
+        _, debug = self.run_debug()
+        entry = debug[("uk", "en")]
+        self.assertEqual(list(entry["items"]), ["i1", "i2", "i3", "i4"])
+        self.assertEqual(entry["answers"], [self.reply])
+
+    def test_coverage_counts_per_source_and_lists_what_was_left_out(self):
+        result, debug = self.run_debug()
+        per_source, left_out = coverage(debug[("uk", "en")]["items"], result.stories)
+        self.assertEqual(per_source, {"BBC": (2, 1), "Sky": (2, 1)})
+        self.assertEqual(sorted(i["title"] for i in left_out), ["Story four", "Story two"])
+        text = format_coverage("uk", "en", debug[("uk", "en")], result.stories)
+        self.assertIn("4 items sent, 2 covered, 2 left out", text)
+        self.assertIn("BBC 1/2 | Sky 1/2", text)
+        self.assertIn("left out: [BBC] Story two", text)
+
+    def test_retries_keep_every_raw_answer(self):
+        debug = {}
+        run_ai(self.items, self.cfg, provider=Stub(["garbage", self.reply]), now=NOW, debug=debug)
+        self.assertEqual(debug[("uk", "en")]["answers"], ["garbage", self.reply])
+
+    def test_files_are_written(self):
+        _, debug = self.run_debug()
+        folder = Path(tempfile.mkdtemp()) / "debug"
+        files = write_debug(debug, folder)
+        self.assertEqual([f.name for f in files], ["uk-en.json"])
+        saved = json.loads(files[0].read_text(encoding="utf-8"))
+        self.assertEqual(saved["answers"], [self.reply])
+        self.assertEqual(saved["items"]["i2"]["title"], "Story two")
+
+
+class SchemaAndReasonsTests(unittest.TestCase):
+    def setUp(self):
+        self.cfg = make_config()
+        self.items = [mk("BBC", "UK one"), mk("Sky", "UK two"), mk("Guardian", "UK three")]
+
+    def test_the_schema_is_sent_on_every_call_and_omitted_when_not_given(self):
+        stub = Stub([answer({"items": ["i1"], "lead": "i1", "summary": "", "score": 5})])
+        run_ai(self.items, self.cfg, provider=stub, now=NOW)
+        self.assertIs(stub.schemas[0], STORIES_SCHEMA)
+        Handler.script, Handler.log = [ok_reply("{}")], []
+        server = HTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            GeminiProvider("k", "m", backoff=0.01, base_url=f"http://127.0.0.1:{server.server_port}/v1beta").generate("s", "u")
+        finally:
+            server.shutdown()
+            server.server_close()
+        self.assertNotIn("responseJsonSchema", Handler.log[0]["body"]["generationConfig"])
+
+    def test_every_rejection_has_a_reason(self):
+        reasons = {}
+        text = json.dumps({"stories": [
+            {"items": "i1", "lead": "i1", "summary": "", "score": 5},        # items is not a list
+            "not even an object",
+            {"items": ["zzz"], "lead": "zzz", "summary": "", "score": 5},    # unknown id
+            {"items": ["i1"], "lead": "i1", "summary": "", "score": 99},     # bad score
+            {"items": ["i2"], "lead": "i2", "summary": "", "score": 6}]})   # fine
+        items = {f"i{n}": it for n, it in enumerate(self.items, 1)}
+        stories, dropped, _ = parse_stories(text, items, "uk", "en", self.cfg, reasons)
+        self.assertEqual(len(stories), 1)
+        self.assertEqual(dropped, 4)
+        self.assertEqual(reasons, {"malformed": 2, "unknown or repeated ids": 1, "bad score": 1})
+
+    def test_reasons_reach_the_report_and_its_text(self):
+        bad = answer(*[{"items": ["i1"], "lead": "i1", "summary": "", "score": 99}] * 3,
+                     {"items": ["i2"], "lead": "i2", "summary": "", "score": 6})
+        result = run_ai(self.items, self.cfg, provider=Stub([bad]), now=NOW)
+        report = result.reports[0]
+        self.assertEqual((report.stories_dropped, report.drop_reasons), (3, {"bad score": 3}))
+        self.assertIn("dropped: 3 stories (bad score 3), 0 summaries", format_ai_report([report]))
+
+    def test_reasons_are_kept_when_nothing_valid_remains(self):
+        bad = answer({"items": ["i1"], "lead": "i1", "summary": "", "score": 99})
+        report = run_ai(self.items, self.cfg, provider=Stub([bad, bad]), now=NOW).reports[0]
+        self.assertEqual((report.fallback, report.error, report.drop_reasons), (True, "no valid stories", {"bad score": 1}))
+
+
 class Handler(BaseHTTPRequestHandler):
     script = []
     log = []
@@ -456,6 +551,7 @@ class GeminiTests(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         cls.server.shutdown()
+        cls.server.server_close()
 
     def setUp(self):
         Handler.script, Handler.log = [], []
@@ -465,7 +561,7 @@ class GeminiTests(unittest.TestCase):
 
     def test_request_shape_and_token_counts(self):
         Handler.script = [ok_reply('{"stories": []}', prompt=120, out=30, thoughts=10)]
-        reply = self.provider().generate("SYSTEM TEXT", "USER TEXT")
+        reply = self.provider().generate("SYSTEM TEXT", "USER TEXT", STORIES_SCHEMA)
         req = Handler.log[0]
         self.assertEqual(req["path"], "/v1beta/models/test-model:generateContent")
         self.assertEqual(req["key"], self.KEY)
@@ -473,6 +569,9 @@ class GeminiTests(unittest.TestCase):
         self.assertEqual(req["body"]["systemInstruction"]["parts"][0]["text"], "SYSTEM TEXT")
         self.assertEqual(req["body"]["contents"][0]["parts"][0]["text"], "USER TEXT")
         self.assertEqual(req["body"]["generationConfig"]["responseMimeType"], "application/json")
+        schema = req["body"]["generationConfig"]["responseJsonSchema"]
+        self.assertEqual(schema["required"], ["stories"])
+        self.assertEqual(schema["properties"]["stories"]["items"]["required"], ["items", "lead", "summary", "score"])
         self.assertEqual((reply.text, reply.input_tokens, reply.output_tokens), ('{"stories": []}', 120, 40))
 
     def test_thought_parts_are_ignored(self):

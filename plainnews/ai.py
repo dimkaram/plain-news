@@ -10,6 +10,8 @@ page is never empty.
 Run on its own:
     python -m plainnews.ai                 fetch feeds, call the model, print results
     python -m plainnews.ai --list-models   list the models your key can use
+    python -m plainnews.ai --debug         also show what the model left out, and save its raw
+                                           answers to data/debug/
 """
 from __future__ import annotations
 
@@ -31,6 +33,28 @@ from .fetch import Item, fetch_all
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta"
 LANGUAGE_NAMES = {"en": "English", "el": "Greek", "fr": "French", "it": "Italian",
                   "de": "German", "es": "Spanish", "pt": "Portuguese", "nl": "Dutch"}
+
+# The shape every answer must have. Gemini enforces it while writing, so the structure cannot be garbled;
+# the checks in parse_stories() still run on top, because the *content* is not guaranteed.
+STORIES_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "stories": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "items": {"type": "array", "items": {"type": "string"}},
+                    "lead": {"type": "string"},
+                    "summary": {"type": "string"},
+                    "score": {"type": "integer"},
+                },
+                "required": ["items", "lead", "summary", "score"],
+            },
+        }
+    },
+    "required": ["stories"],
+}
 
 _FENCE_RE = re.compile(r"^\s*```(?:json)?\s*|\s*```\s*$", re.I)
 _SENT_SPLIT = re.compile(r"(?<=[.!?\u2026;])\s+")
@@ -92,6 +116,7 @@ class GroupReport:
     stories: int = 0
     items_covered: int = 0
     stories_dropped: int = 0
+    drop_reasons: dict = field(default_factory=dict)   # why stories were rejected
     summaries_dropped: int = 0
     calls: int = 0
     input_tokens: int = 0
@@ -159,12 +184,14 @@ class GeminiProvider:
         message = " ".join(str(message).split())[:100]
         return f" ({message})" if message else ""
 
-    def generate(self, system: str, user: str) -> LLMResponse:
+    def generate(self, system: str, user: str, schema: dict | None = None) -> LLMResponse:
+        generation = {"responseMimeType": "application/json", "maxOutputTokens": self.max_output_tokens}
+        if schema:
+            generation["responseJsonSchema"] = schema
         body = {
             "systemInstruction": {"parts": [{"text": system}]},
             "contents": [{"role": "user", "parts": [{"text": user}]}],
-            "generationConfig": {"responseMimeType": "application/json",
-                                 "maxOutputTokens": self.max_output_tokens},
+            "generationConfig": generation,
         }
         data = self._call("POST", f"{self.base_url}/models/{self.model}:generateContent", json=body)
         candidates = data.get("candidates") or []
@@ -346,8 +373,16 @@ def _story_from_group(group: list, lead: Item, summary: str, ai_score, region: s
         published=max(dates).isoformat() if dates else None, fallback=fallback)
 
 
-def parse_stories(text: str, items_by_id: dict, region: str, language: str, config: Config):
-    """Check the model's answer. Returns (stories, stories_dropped, summaries_dropped)."""
+def parse_stories(text: str, items_by_id: dict, region: str, language: str, config: Config, reasons: dict | None = None):
+    """Check the model's answer. Returns (stories, stories_dropped, summaries_dropped).
+
+    If a dict is passed as `reasons`, it is filled with how many stories were rejected for each reason.
+    """
+    reasons = {} if reasons is None else reasons
+
+    def reject(why):
+        reasons[why] = reasons.get(why, 0) + 1
+
     data = _parse_json(text)
     raw = data.get("stories") if isinstance(data, dict) else None
     if not isinstance(raw, list):
@@ -358,6 +393,7 @@ def parse_stories(text: str, items_by_id: dict, region: str, language: str, conf
     for entry in raw:
         if not isinstance(entry, dict) or not isinstance(entry.get("items"), list):
             stories_dropped += 1
+            reject("malformed")
             continue
         ids = []
         for item_id in entry["items"]:
@@ -366,6 +402,7 @@ def parse_stories(text: str, items_by_id: dict, region: str, language: str, conf
         score = _valid_score(entry.get("score"))
         if not ids or score is None:
             stories_dropped += 1
+            reject("unknown or repeated ids" if not ids else "bad score")
             continue
         used.update(ids)
         group = [items_by_id[i] for i in ids]
@@ -414,13 +451,19 @@ class _Budget:
         self.used = 0
 
 
-def _run_group(region_id, region_label, language, items, config, provider, provider_error, budget, now):
+def _run_group(region_id, region_label, language, items, config, provider, provider_error, budget, now,
+               debug=None):
     report = GroupReport(region=region_id, language=language, items_sent=len(items))
     started = time.monotonic()
     limit = config.ai["max_stories_per_region"]
     items_by_id = {f"i{n}": item for n, item in enumerate(items, 1)}
     error = provider_error
     stories = []
+    entry = None
+    if debug is not None:
+        entry = debug.setdefault((region_id, language), {"items": {
+            item_id: {"source": i.source, "title": i.title, "snippet": i.snippet, "rank": i.rank, "link": i.link}
+            for item_id, i in items_by_id.items()}, "answers": []})
 
     if provider is not None:
         system = build_system_prompt(region_label, language, config)
@@ -432,7 +475,7 @@ def _run_group(region_id, region_label, language, items, config, provider, provi
             budget.used += 1
             report.calls += 1
             try:
-                response = provider.generate(system, user)
+                response = provider.generate(system, user, STORIES_SCHEMA)
             except AIError as exc:
                 error = str(exc)
                 break
@@ -441,8 +484,14 @@ def _run_group(region_id, region_label, language, items, config, provider, provi
                 break
             report.input_tokens += response.input_tokens or 0
             report.output_tokens += response.output_tokens or 0
+            if entry is not None:
+                entry["answers"].append(response.text)
+            reasons = {}
             try:
-                stories, dropped, summaries = parse_stories(response.text, items_by_id, region_id, language, config)
+                stories, dropped, summaries = parse_stories(response.text, items_by_id, region_id, language, config,
+                                                            reasons)
+                report.stories_dropped, report.summaries_dropped = dropped, summaries
+                report.drop_reasons = reasons
                 if not stories:
                     raise AIError("no valid stories")
             except AIError as exc:
@@ -451,7 +500,6 @@ def _run_group(region_id, region_label, language, items, config, provider, provi
                     report.retry_reason = error
                     report.first_answer_preview = " ".join(response.text.split())[:300]
                 continue
-            report.stories_dropped, report.summaries_dropped = dropped, summaries
             break
 
     if stories:
@@ -468,7 +516,7 @@ def _run_group(region_id, region_label, language, items, config, provider, provi
     return stories, report
 
 
-def run_ai(items: list, config: Config, provider=None, now: datetime | None = None) -> AIResult:
+def run_ai(items: list, config: Config, provider=None, now: datetime | None = None, debug=None) -> AIResult:
     """One model call per (region, language). A failed group falls back to raw headlines."""
     now = now or datetime.now(timezone.utc)
     provider_error = None
@@ -488,10 +536,50 @@ def run_ai(items: list, config: Config, provider=None, now: datetime | None = No
     result = AIResult()
     for (region, language) in sorted(groups, key=lambda k: (order.get(k[0], 99), k[1])):
         stories, report = _run_group(region, labels.get(region, region), language, groups[(region, language)],
-                                     config, provider, provider_error, budget, now)
+                                     config, provider, provider_error, budget, now, debug)
         result.stories.extend(stories)
         result.reports.append(report)
     return result
+
+
+# ---------------------------------------------------------------- debugging
+
+def coverage(items_info: dict, stories: list):
+    """Which items did the model's stories cover? Returns (per_source, left_out).
+
+    per_source maps source name -> (items sent, items covered); left_out lists the uncovered items.
+    """
+    covered = {si.link for s in stories for si in s.items}
+    per_source, left_out = {}, []
+    for info in items_info.values():
+        sent, got = per_source.get(info["source"], (0, 0))
+        is_covered = info["link"] in covered
+        per_source[info["source"]] = (sent + 1, got + (1 if is_covered else 0))
+        if not is_covered:
+            left_out.append(info)
+    left_out.sort(key=lambda i: (i["rank"], i["source"]))
+    return per_source, left_out
+
+
+def format_coverage(region: str, language: str, entry: dict, stories: list, show: int = 8) -> str:
+    per_source, left_out = coverage(entry["items"], [s for s in stories if s.region == region])
+    sent = len(entry["items"])
+    lines = [f"-- {region} ({language}): {sent} items sent, {sent - len(left_out)} covered, {len(left_out)} left out",
+             "   " + " | ".join(f"{name} {got}/{n}" for name, (n, got) in per_source.items())]
+    for info in left_out[:show]:
+        lines.append(f"   left out: [{info['source']}] {info['title'][:80]}")
+    return "\n".join(lines)
+
+
+def write_debug(debug: dict, directory) -> list:
+    """Save each group's items sent and the model's raw answers. Returns the files written."""
+    directory.mkdir(parents=True, exist_ok=True)
+    written = []
+    for (region, language), entry in debug.items():
+        path = directory / f"{region}-{language}.json"
+        path.write_text(json.dumps(entry, ensure_ascii=False, indent=1), encoding="utf-8")
+        written.append(path)
+    return written
 
 
 # ------------------------------------------------------------- command line
@@ -503,7 +591,8 @@ def format_ai_report(reports) -> str:
         line = (f"[{status:<8}] {r.region:<8} {r.language}  sent {r.items_sent}, stories {r.stories}, "
                 f"covering {r.items_covered}  calls {r.calls}  tokens {r.input_tokens}/{r.output_tokens}")
         if r.stories_dropped or r.summaries_dropped:
-            line += f"  dropped: {r.stories_dropped} stories, {r.summaries_dropped} summaries"
+            why = ", ".join(f"{k} {v}" for k, v in sorted(r.drop_reasons.items(), key=lambda kv: -kv[1]))
+            line += f"  dropped: {r.stories_dropped} stories{f' ({why})' if why else ''}, {r.summaries_dropped} summaries"
         if r.error:
             line += f"  ({r.error})"
         if r.retry_reason:
@@ -532,8 +621,16 @@ def main(argv=None) -> int:
         return 0
 
     items, _ = fetch_all(config)
-    result = run_ai(items, config)
+    debug = {} if "--debug" in argv else None
+    result = run_ai(items, config, debug=debug)
     print(format_ai_report(result.reports))
+    if debug is not None:
+        print()
+        for (region, language), entry in debug.items():
+            print(format_coverage(region, language, entry, result.stories))
+        files = write_debug(debug, ROOT / "data" / "debug")
+        if files:
+            print(f"\nraw answers saved in data/debug/: {', '.join(f.name for f in files)}")
     for report in result.reports:
         print(f"\n== {report.region} ({report.language}) ==")
         for story in [s for s in result.stories if s.region == report.region][:5]:
