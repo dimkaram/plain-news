@@ -1,0 +1,10 @@
+# Create with:  conda env create -f environment.yml   (run from the repo root)
+# The package list lives in requirements.txt so there is only one to maintain.
+name: plain-news
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - pip
+  - pip:
+      - -r requirements.txt
