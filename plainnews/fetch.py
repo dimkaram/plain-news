@@ -24,7 +24,6 @@ from tenacity import Retrying, retry_if_exception_type, stop_after_attempt, wait
 
 from .config import ROOT, Config, Source, load_config
 
-SNIPPET_CHARS = 300
 _TAG_RE = re.compile(r"<[^>]+>")
 _SPACE_RE = re.compile(r"\s+")
 _IMG_RE = re.compile(r"""<img\b[^>]*?\bsrc\s*=\s*["']([^"']+)["']""", re.I)
@@ -169,13 +168,13 @@ def _find_image(entry, base: str) -> str | None:
     return "https://" + url[len("http://"):] if url.startswith("http://") else url
 
 
-def _normalise(entry, source: Source, rank: int) -> Item | None:
+def _normalise(entry, source: Source, rank: int, snippet_chars: int) -> Item | None:
     title = _clean_text(entry.get("title"))
     link = (entry.get("link") or "").strip()
     if not title or not link:
         return None
     link = urljoin(source.feed_url, link)
-    snippet = _truncate(_clean_text(entry.get("summary") or entry.get("description")), SNIPPET_CHARS)
+    snippet = _truncate(_clean_text(entry.get("summary") or entry.get("description")), snippet_chars)
     return Item(
         title=title,
         link=link,
@@ -209,7 +208,8 @@ def fetch_feed(source: Source, config: Config, now: datetime):
             result.error = "no items"
             return result, items
 
-        normalised = [i for i in (_normalise(e, source, rank) for rank, e in enumerate(entries)) if i]
+        chars = int(config.fetch["snippet_chars"])
+        normalised = [i for i in (_normalise(e, source, rank, chars) for rank, e in enumerate(entries)) if i]
         dates = [i.published for i in normalised if i.published]
         if dates:
             result.newest_age_hours = round((now - max(dates)).total_seconds() / 3600, 1)

@@ -30,9 +30,18 @@ class RealConfigTests(unittest.TestCase):
 
     def test_runtime_defaults(self):
         self.assertEqual(self.cfg.fetch["retries"], 3)
-        self.assertEqual(self.cfg.ai["max_calls_per_run"], 8)
+        self.assertEqual(self.cfg.fetch["snippet_chars"], 300)
         self.assertTrue(self.cfg.images["og_image_fallback"])
         self.assertEqual(self.cfg.items_in_all, 15)
+
+    def test_ai_settings(self):
+        ai = self.cfg.ai
+        self.assertEqual(ai["provider"], "gemini")
+        self.assertEqual(ai["summary_max_sentences"], 2)
+        self.assertEqual(ai["max_stories_per_region"], 25)
+        self.assertEqual(ai["max_calls_per_run"], 12)
+        self.assertEqual(ai["coverage_bonus_max"], 2)       # default, not set in the file
+        self.assertEqual(self.cfg.extra_rules, "")           # plain news: no rules by default
 
 
 class InvalidConfigTests(unittest.TestCase):
@@ -63,6 +72,20 @@ sources:
     def test_missing_file(self):
         with self.assertRaises(ConfigError):
             load_config("/nonexistent/sources.yaml")
+
+    def test_bad_ai_settings_are_reported(self):
+        text = """
+regions: [{id: uk, label: UK}]
+ai: {summary_max_sentences: 0, coverage_bonus_max: -1}
+extra_rules: 5
+sources:
+  - {name: A, region: uk, feed_url: "https://a.example/f", max_items_considered: 5}
+"""
+        with self.assertRaises(ConfigError) as ctx:
+            self.load(text)
+        msg = str(ctx.exception)
+        for fragment in ("ai.summary_max_sentences", "ai.coverage_bonus_max", "extra_rules must be text"):
+            self.assertIn(fragment, msg)
 
     def test_needs_an_enabled_source(self):
         text = """

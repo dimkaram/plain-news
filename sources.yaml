@@ -30,20 +30,15 @@ regions:
 label_priority: [bristol, greece, uk, world]
 
 ai:
-  provider: github-models      # OpenAI-compatible API; change provider here
-  model: ""                    # TODO: choose after testing Greek quality
-  max_calls_per_run: 8         # one call per region, plus spare for retries
-  max_input_tokens_per_call: 7000   # the free tier allows about 8000
+  provider: gemini             # the key goes in the GEMINI_API_KEY secret
+  model: ""                    # set after listing the models your key can use
+  summary_max_sentences: 2     # summaries are "up to" this many sentences
+  max_stories_per_region: 25   # the most stories the AI may return per region
+  max_calls_per_run: 12        # hard cap on AI calls per run (a bad answer is asked again once)
 
-# DRAFT wording, one rule for all regions. Sent to the AI as instructions.
-topic_rule: |
-  Prioritise mainstream news: politics, government, the economy, world events,
-  major incidents and disasters, public services, and significant local
-  matters. Local life is also welcome: community news, local events and
-  "what's on" listings. Sports, technology, entertainment and lifestyle
-  stories are allowed when they are widely newsworthy, but hard news always
-  ranks above them. Exclude celebrity gossip, horoscopes, name-day listings,
-  shopping deals and purely promotional content.
+# Optional extra instructions for the AI, applied to every region. Empty by
+# default: plain news, no topic filtering. Example: "Ignore sport."
+extra_rules: ""
 
 images:
   og_image_fallback: true      # read the article page's og:image if the feed has none
@@ -53,6 +48,7 @@ images:
 fetch:
   timeout_seconds: 20
   retries: 3
+  snippet_chars: 300         # how much of each item's snippet the AI sees
 
 # Per source:
 #   max_items_considered  how many of the feed's items the AI gets to see.

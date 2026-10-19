@@ -11,10 +11,18 @@ ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_PATH = ROOT / "sources.yaml"
 
 AI_DEFAULTS = {
-    "provider": "github-models",
+    "provider": "gemini",
     "model": "",
-    "max_calls_per_run": 8,
-    "max_input_tokens_per_call": 7000,
+    "api_key_env": "GEMINI_API_KEY",
+    "summary_max_sentences": 2,
+    "max_stories_per_region": 25,
+    "max_calls_per_run": 12,
+    "max_output_tokens": 8192,
+    "timeout_seconds": 90,
+    "retries": 3,
+    "backoff_seconds": 2,
+    "coverage_bonus_per_source": 1,
+    "coverage_bonus_max": 2,
 }
 IMAGE_DEFAULTS = {
     "og_image_fallback": True,
@@ -26,6 +34,7 @@ FETCH_DEFAULTS = {
     "retries": 3,
     "backoff_seconds": 1,
     "max_workers": 6,
+    "snippet_chars": 300,
     "user_agent": "Mozilla/5.0 (compatible; plain-news/0.1)",
 }
 
@@ -64,7 +73,7 @@ class Config:
     regions: tuple
     label_priority: tuple
     ai: dict
-    topic_rule: str
+    extra_rules: str
     images: dict
     fetch: dict
     sources: tuple
@@ -122,10 +131,18 @@ def load_config(path=None) -> Config:
         errors.append("label_priority must list every region id exactly once")
         priority = region_ids
 
-    topic_rule = raw.get("topic_rule")
-    if not isinstance(topic_rule, str) or not topic_rule.strip():
-        errors.append("topic_rule is required and must be text")
-        topic_rule = ""
+    extra_rules = raw.get("extra_rules") or ""
+    if not isinstance(extra_rules, str):
+        errors.append("extra_rules must be text (it may be left empty)")
+        extra_rules = ""
+
+    ai = {**AI_DEFAULTS, **(raw.get("ai") or {})}
+    for key in ("summary_max_sentences", "max_stories_per_region", "max_calls_per_run",
+                "max_output_tokens", "timeout_seconds", "retries"):
+        _positive_int(errors, f"ai.{key}", ai[key])
+    for key in ("coverage_bonus_per_source", "coverage_bonus_max"):
+        if isinstance(ai[key], bool) or not isinstance(ai[key], int) or ai[key] < 0:
+            errors.append(f"ai.{key} must be a whole number, 0 or more (got {ai[key]!r})")
 
     sources = []
     seen = set()
@@ -174,8 +191,8 @@ def load_config(path=None) -> Config:
         default_language=default_language,
         regions=tuple(regions),
         label_priority=tuple(priority),
-        ai={**AI_DEFAULTS, **(raw.get("ai") or {})},
-        topic_rule=topic_rule,
+        ai=ai,
+        extra_rules=extra_rules.strip(),
         images={**IMAGE_DEFAULTS, **(raw.get("images") or {})},
         fetch={**FETCH_DEFAULTS, **(raw.get("fetch") or {})},
         sources=tuple(sources),
