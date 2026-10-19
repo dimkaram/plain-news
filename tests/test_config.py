@@ -42,6 +42,7 @@ class RealConfigTests(unittest.TestCase):
         self.assertEqual(ai["max_stories_per_region"], 25)
         self.assertEqual(ai["max_calls_per_run"], 12)
         self.assertEqual(ai["coverage_bonus_max"], 2)       # default, not set in the file
+        self.assertEqual(ai["min_stories_share"], 0.5)      # default, not set in the file
         self.assertEqual(self.cfg.extra_rules, "")           # plain news: no rules by default
 
 
@@ -91,7 +92,7 @@ sources:
     def test_bad_ai_settings_are_reported(self):
         text = """
 regions: [{id: uk, label: UK}]
-ai: {summary_max_sentences: 0, coverage_bonus_max: -1}
+ai: {summary_max_sentences: 0, coverage_bonus_max: -1, min_stories_share: 1.5}
 extra_rules: 5
 sources:
   - {name: A, region: uk, feed_url: "https://a.example/f", max_items_considered: 5}
@@ -99,7 +100,8 @@ sources:
         with self.assertRaises(ConfigError) as ctx:
             self.load(text)
         msg = str(ctx.exception)
-        for fragment in ("ai.summary_max_sentences", "ai.coverage_bonus_max", "extra_rules must be text"):
+        for fragment in ("ai.summary_max_sentences", "ai.coverage_bonus_max", "ai.min_stories_share",
+                         "extra_rules must be text"):
             self.assertIn(fragment, msg)
 
     def test_needs_an_enabled_source(self):

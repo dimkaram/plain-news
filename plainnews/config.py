@@ -16,6 +16,7 @@ AI_DEFAULTS = {
     "api_key_env": "GEMINI_API_KEY",
     "summary_max_sentences": 2,
     "max_stories_per_region": 25,
+    "min_stories_share": 0.5,
     "max_calls_per_run": 12,
     "max_output_tokens": 8192,
     "timeout_seconds": 90,
@@ -157,6 +158,9 @@ def load_config(path=None) -> Config:
     for key in ("summary_max_sentences", "max_stories_per_region", "max_calls_per_run",
                 "max_output_tokens", "timeout_seconds", "retries"):
         _positive_int(errors, f"ai.{key}", ai[key])
+    share = ai["min_stories_share"]
+    if isinstance(share, bool) or not isinstance(share, (int, float)) or not 0 <= share <= 1:
+        errors.append(f"ai.min_stories_share must be a number from 0 to 1 (got {share!r}); 0 turns the minimum off")
     for key in ("coverage_bonus_per_source", "coverage_bonus_max"):
         if isinstance(ai[key], bool) or not isinstance(ai[key], int) or ai[key] < 0:
             errors.append(f"ai.{key} must be a whole number, 0 or more (got {ai[key]!r})")

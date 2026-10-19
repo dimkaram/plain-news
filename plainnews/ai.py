@@ -15,7 +15,9 @@ Run on its own:
 """
 from __future__ import annotations
 
+import copy
 import json
+import math
 import os
 import re
 import sys
@@ -55,6 +57,19 @@ STORIES_SCHEMA = {
     },
     "required": ["stories"],
 }
+
+def stories_schema(n_items: int, config: Config) -> dict:
+    """The schema for one call. The answer may not be shorter than a share of the items sent (so the model
+    cannot stop early) or longer than the story limit. Surplus entries are dropped by parse_stories()."""
+    schema = copy.deepcopy(STORIES_SCHEMA)
+    stories = schema["properties"]["stories"]
+    top = int(config.ai["max_stories_per_region"])
+    stories["maxItems"] = top
+    share = float(config.ai["min_stories_share"])
+    if share > 0:
+        stories["minItems"] = max(1, min(top, math.ceil(n_items * share)))
+    return schema
+
 
 _FENCE_RE = re.compile(r"^\s*```(?:json)?\s*|\s*```\s*$", re.I)
 _SENT_SPLIT = re.compile(r"(?<=[.!?\u2026;])\s+")
@@ -475,7 +490,7 @@ def _run_group(region_id, region_label, language, items, config, provider, provi
             budget.used += 1
             report.calls += 1
             try:
-                response = provider.generate(system, user, STORIES_SCHEMA)
+                response = provider.generate(system, user, stories_schema(len(items), config))
             except AIError as exc:
                 error = str(exc)
                 break

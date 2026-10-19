@@ -8,7 +8,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from unittest import mock
 
-from plainnews.ai import (STORIES_SCHEMA, AIError, GeminiProvider, LLMResponse, build_system_prompt, build_user_message, coverage,
+from plainnews.ai import (STORIES_SCHEMA, AIError, GeminiProvider, stories_schema, LLMResponse, build_system_prompt, build_user_message, coverage,
                           fallback_stories, format_ai_report, format_coverage, parse_stories, rank_stories,
                           run_ai, write_debug)
 from plainnews.config import load_config
@@ -468,7 +468,10 @@ class SchemaAndReasonsTests(unittest.TestCase):
     def test_the_schema_is_sent_on_every_call_and_omitted_when_not_given(self):
         stub = Stub([answer({"items": ["i1"], "lead": "i1", "summary": "", "score": 5})])
         run_ai(self.items, self.cfg, provider=stub, now=NOW)
-        self.assertIs(stub.schemas[0], STORIES_SCHEMA)
+        sent = stub.schemas[0]
+        self.assertEqual(sent["properties"]["stories"]["items"], STORIES_SCHEMA["properties"]["stories"]["items"])
+        self.assertEqual(sent["properties"]["stories"]["maxItems"], 25)
+        self.assertEqual(sent["properties"]["stories"]["minItems"], 2)        # half of the 3 items, rounded up
         Handler.script, Handler.log = [ok_reply("{}")], []
         server = HTTPServer(("127.0.0.1", 0), Handler)
         threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -505,6 +508,40 @@ class SchemaAndReasonsTests(unittest.TestCase):
         bad = answer({"items": ["i1"], "lead": "i1", "summary": "", "score": 99})
         report = run_ai(self.items, self.cfg, provider=Stub([bad, bad]), now=NOW).reports[0]
         self.assertEqual((report.fallback, report.error, report.drop_reasons), (True, "no valid stories", {"bad score": 1}))
+
+
+class StoryCountBoundsTests(unittest.TestCase):
+    def bounds(self, n, config=None):
+        stories = stories_schema(n, config or make_config())["properties"]["stories"]
+        return stories.get("minItems"), stories["maxItems"]
+
+    def test_minimum_is_half_the_items_up_to_the_story_limit(self):
+        self.assertEqual(self.bounds(74), (25, 25))      # UK: the model may not stop at 8 stories
+        self.assertEqual(self.bounds(35), (18, 25))
+        self.assertEqual(self.bounds(6), (3, 25))
+        self.assertEqual(self.bounds(1), (1, 25))
+
+    def test_settings_change_the_bounds_and_zero_turns_the_minimum_off(self):
+        self.assertEqual(self.bounds(74, make_config(", max_stories_per_region: 10")), (10, 10))
+        self.assertEqual(self.bounds(74, make_config(", min_stories_share: 0.2")), (15, 25))
+        self.assertEqual(self.bounds(74, make_config(", min_stories_share: 0")), (None, 25))
+
+    def test_the_base_schema_is_never_modified(self):
+        stories_schema(74, make_config())
+        self.assertNotIn("maxItems", STORIES_SCHEMA["properties"]["stories"])
+        self.assertNotIn("minItems", STORIES_SCHEMA["properties"]["stories"])
+
+    def test_padding_entries_are_dropped_not_shown(self):
+        """If the model must reach the minimum, repeated or made-up ids are rejected by the checks."""
+        cfg = make_config()
+        items = [mk("BBC", "Only story")]
+        padded = answer({"items": ["i1"], "lead": "i1", "summary": "", "score": 6},
+                        {"items": ["i1"], "lead": "i1", "summary": "", "score": 5},       # repeats i1
+                        {"items": ["i99"], "lead": "i99", "summary": "", "score": 5})     # made-up id
+        result = run_ai(items, cfg, provider=Stub([padded]), now=NOW)
+        report = result.reports[0]
+        self.assertEqual((len(result.stories), report.stories_dropped, report.drop_reasons),
+                         (1, 2, {"unknown or repeated ids": 2}))
 
 
 class Handler(BaseHTTPRequestHandler):
