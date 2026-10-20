@@ -40,6 +40,9 @@ DEFAULT_BOILERPLATE = (
     "ακολουθήστε μας", "εγγραφείτε", "εμφανίστηκε πρώτα", "γραμμή βοήθειας",
 )
 
+DEFAULT_UPDATE_TIMES = ("07:15", "12:15", "17:45", "21:15")
+_TIME_RE = re.compile(r"([01]\d|2[0-3]):[0-5]\d")
+
 FETCH_DEFAULTS = {
     "timeout_seconds": 20,
     "retries": 3,
@@ -82,6 +85,9 @@ class Config:
     items_in_all: int
     commit_warning_days: int
     stale_after_hours: int
+    update_times: tuple
+    update_window_minutes: int
+    max_attempts_per_update: int
     repo_url: str
     footer_note: str
     default_language: str
@@ -129,6 +135,15 @@ def load_config(path=None) -> Config:
     in_all = _positive_int(errors, "settings.items_in_all", s.get("items_in_all", 15))
     warn_days = _positive_int(errors, "settings.commit_warning_days", s.get("commit_warning_days", 45))
     stale_hours = _positive_int(errors, "settings.stale_after_hours", s.get("stale_after_hours", 24))
+    window = _positive_int(errors, "settings.update_window_minutes", s.get("update_window_minutes", 120))
+    attempts = _positive_int(errors, "settings.max_attempts_per_update", s.get("max_attempts_per_update", 4))
+    update_times = s.get("update_times", list(DEFAULT_UPDATE_TIMES))
+    if (not isinstance(update_times, list) or not update_times
+            or not all(isinstance(x, str) and _TIME_RE.fullmatch(x) for x in update_times)
+            or len(set(update_times)) != len(update_times)):
+        errors.append("settings.update_times must be a list of different 'HH:MM' times, e.g. [\"07:15\", \"17:45\"] "
+                      f"(got {update_times!r})")
+        update_times = list(DEFAULT_UPDATE_TIMES)
 
     repo_url = site.get("repo_url") or ""
     if not isinstance(repo_url, str) or (repo_url and not re.match(r"https?://\S+$", repo_url)):
@@ -223,6 +238,9 @@ def load_config(path=None) -> Config:
         items_in_all=in_all,
         commit_warning_days=warn_days,
         stale_after_hours=stale_hours,
+        update_times=tuple(sorted(update_times)),
+        update_window_minutes=window,
+        max_attempts_per_update=attempts,
         repo_url=repo_url,
         footer_note=footer_note.strip(),
         default_language=default_language,

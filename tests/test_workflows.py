@@ -19,11 +19,8 @@ class PublishWorkflowTests(unittest.TestCase):
     def setUp(self):
         self.text, self.wf = load("publish.yml")
 
-    def test_runs_twice_a_day_in_uk_time_and_on_demand(self):
-        schedule = self.wf["on"]["schedule"]
-        self.assertEqual([(s["cron"], s["timezone"]) for s in schedule],
-                         [("15 7 * * *", "Europe/London"), ("45 17 * * *", "Europe/London")])
-        self.assertIn("workflow_dispatch", self.wf["on"])
+    def test_has_no_timer_of_its_own_and_can_be_started_by_hand_or_by_the_check(self):
+        self.assertEqual(set(self.wf["on"]), {"workflow_dispatch"})        # no schedule: the check starts it
 
     def test_least_privilege_permissions(self):
         self.assertEqual(self.wf["permissions"], {"contents": "read"})
@@ -54,6 +51,34 @@ class PublishWorkflowTests(unittest.TestCase):
         self.assertIn("python -m plainnews.build", run)
 
 
+class CheckWorkflowTests(unittest.TestCase):
+    def setUp(self):
+        self.text, self.wf = load("check-schedule.yml")
+
+    def test_checks_every_half_hour_in_plain_utc_away_from_the_top_of_the_hour(self):
+        schedule = self.wf["on"]["schedule"]
+        self.assertEqual([s["cron"] for s in schedule], ["17 * * * *", "47 * * * *"])
+        self.assertTrue(all("timezone" not in s for s in schedule))        # no reliance on the timezone feature
+        self.assertIn("workflow_dispatch", self.wf["on"])
+
+    def test_may_start_workflows_and_read_the_repository_and_nothing_else(self):
+        self.assertEqual(self.wf["permissions"], {"actions": "write", "contents": "read"})
+
+    def test_uses_only_the_built_in_token(self):
+        self.assertEqual(re.findall(r"\$\{\{\s*secrets\.(\w+)", self.text), ["GITHUB_TOKEN"])
+
+    def test_runs_the_update_check_and_does_not_overlap_itself(self):
+        steps = self.wf["jobs"]["check"]["steps"]
+        self.assertIn("python -m plainnews.updates", [s.get("run") for s in steps])
+        self.assertEqual(self.wf["concurrency"], {"group": "check-schedule", "cancel-in-progress": False})
+        self.assertEqual(self.wf["jobs"]["check"]["timeout-minutes"], 5)
+
+    def test_it_starts_the_workflow_that_exists(self):
+        from plainnews.updates import WORKFLOW_FILE
+        self.assertTrue((WORKFLOWS / WORKFLOW_FILE).exists())
+        self.assertIn("workflow_dispatch", load(WORKFLOW_FILE)[1]["on"])
+
+
 class TestsWorkflowTests(unittest.TestCase):
     def test_runs_on_push_and_pull_request_with_no_secrets_and_read_only_access(self):
         text, wf = load("tests.yml")
@@ -66,7 +91,7 @@ class TestsWorkflowTests(unittest.TestCase):
 
 class BothWorkflowsTests(unittest.TestCase):
     def test_only_first_party_actions_are_used_with_a_major_version(self):
-        for name in ("publish.yml", "tests.yml"):
+        for name in ("publish.yml", "tests.yml", "check-schedule.yml"):
             text, _ = load(name)
             uses = re.findall(r"uses:\s*(\S+)", text)
             self.assertTrue(uses)

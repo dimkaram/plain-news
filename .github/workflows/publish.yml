@@ -1,4 +1,7 @@
-# Builds the news page and publishes it to GitHub Pages, twice a day (UK time) or on demand.
+# Builds the news page and publishes it to GitHub Pages.
+#
+# It is started by the "Check schedule" workflow when an update time (settings.update_times in
+# sources.yaml) has passed, and by hand: Actions > Publish > Run workflow.
 #
 # One-time setup in the repository settings:
 #   Settings > Pages > Build and deployment > Source: "GitHub Actions"
@@ -7,15 +10,9 @@
 # If the build fails (for example no feed can be reached), nothing is published and the
 # previous page stays live.
 name: Publish
-run-name: "Publish (${{ github.event_name }} ${{ github.event.schedule }})"
+run-name: "Publish (${{ github.event_name }}, by ${{ github.actor }})"
 
 on:
-  schedule:
-    # Times are UK local time: GitHub applies the clock changes itself.
-    - cron: "15 7 * * *"
-      timezone: "Europe/London"
-    - cron: "45 17 * * *"
-      timezone: "Europe/London"
   workflow_dispatch:
 
 permissions:
@@ -33,7 +30,7 @@ jobs:
       - name: Report what started this run
         run: |
           echo "event:         ${{ github.event_name }}"
-          echo "schedule:      ${{ github.event.schedule }}"
+          echo "started by:    ${{ github.actor }}"
           echo "now (UTC):     $(date -u '+%Y-%m-%d %H:%M:%S')"
           echo "now (London):  $(TZ=Europe/London date '+%Y-%m-%d %H:%M:%S %Z')"
       - uses: actions/checkout@v7

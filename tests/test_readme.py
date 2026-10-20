@@ -34,6 +34,8 @@ def expected_defaults():
         "settings.items_per_region": cfg.items_per_region, "settings.items_in_all": cfg.items_in_all,
         "settings.default_language": cfg.default_language, "settings.stale_after_hours": cfg.stale_after_hours,
         "settings.commit_warning_days": cfg.commit_warning_days,
+        "settings.update_times": cfg.update_times, "settings.update_window_minutes": cfg.update_window_minutes,
+        "settings.max_attempts_per_update": cfg.max_attempts_per_update,
     }
     expected.update({f"ai.{k}": v for k, v in AI_DEFAULTS.items()})
     expected.update({f"images.{k}": v for k, v in IMAGE_DEFAULTS.items()})
@@ -57,7 +59,7 @@ class ReadmeMatchesCodeTests(unittest.TestCase):
 
     def test_the_defaults_stated_in_the_readme_are_the_real_ones(self):
         for key, default in expected_defaults().items():
-            if default in ("", None) or isinstance(default, list):
+            if default in ("", None) or isinstance(default, (list, tuple)):
                 continue                                              # empty and list defaults are described in words
             row = next(r for r in ROWS if r.startswith(f"| `{key}`"))
             cell = row.split("|")[2].strip()
@@ -73,10 +75,15 @@ class ReadmeMatchesCodeTests(unittest.TestCase):
             self.assertTrue((ROOT / (module.replace(".", "/") + ".py")).exists(), module)
 
     def test_the_workflow_snippet_matches_the_real_schedule(self):
-        workflow = (ROOT / ".github" / "workflows" / "publish.yml").read_text(encoding="utf-8")
-        for cron in ('cron: "15 7 * * *"', 'cron: "45 17 * * *"', 'timezone: "Europe/London"'):
+        workflow = (ROOT / ".github" / "workflows" / "check-schedule.yml").read_text(encoding="utf-8")
+        for cron in ('cron: "17 * * * *"', 'cron: "47 * * * *"'):
             self.assertIn(cron, README)
             self.assertIn(cron, workflow)
+
+    def test_the_default_update_times_are_stated_in_the_readme(self):
+        row = next(r for r in ROWS if r.startswith("| `settings.update_times`"))
+        for t in minimal_config().update_times:
+            self.assertIn(t, row)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,38 @@
+# Every half hour: if an update time has passed and no Publish run has succeeded since, start Publish.
+#
+# GitHub's own scheduler can fire late or not at all, so the page is not tied to exact cron times.
+# This check uses plain UTC timing, and a late or lost check is caught by the next one. The update
+# times live in sources.yaml (settings.update_times, in settings.timezone).
+name: Check schedule
+run-name: "Check (${{ github.event_name }} ${{ github.event.schedule }})"
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+    - cron: "47 * * * *"
+  workflow_dispatch:
+
+permissions:
+  actions: write       # to start the Publish workflow
+  contents: read
+
+concurrency:
+  group: check-schedule
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install -r requirements.txt
+      - name: Check whether an update is due
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SCHEDULE: ${{ github.event.schedule }}
+        run: python -m plainnews.updates

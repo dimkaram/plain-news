@@ -2,7 +2,7 @@
 
 Static, non-personalised news summaries by region, aggregated from multiple sources.
 
-Twice a day a GitHub Action reads a set of news feeds, asks an AI model to merge duplicate stories and write
+Several times a day (four by default) a GitHub Action reads a set of news feeds, asks an AI model to merge duplicate stories and write
 a short summary of each, ranks the stories, and publishes a single static web page on GitHub Pages. The page
 shows the top stories overall (**All**) and for each region. Regions are just labels you choose, so they can
 be countries, cities or topics.
@@ -89,6 +89,9 @@ when a setting is left out.
 | `settings.default_language` | `en` | Language of sources that do not set one. Also the page language. |
 | `settings.stale_after_hours` | `24` | A source whose newest item is older than this is flagged as stale. |
 | `settings.commit_warning_days` | `45` | The status log warns when the last commit is older than this. |
+| `settings.update_times` | `07:15`, `12:15`, `17:45`, `21:15` | When the page should be refreshed, as `HH:MM` times in `settings.timezone`. See [Schedule](#schedule). |
+| `settings.update_window_minutes` | `120` | An update stays due for this long after its time, so a late check still catches up. |
+| `settings.max_attempts_per_update` | `4` | Runs tried for one update time before waiting for the next one, so a persistent fault cannot flood you with failure emails. |
 
 ### AI settings
 
@@ -171,20 +174,31 @@ in more than one region.
 
 ## Schedule
 
-The schedule is in `.github/workflows/publish.yml`, because GitHub reads it from there:
+GitHub's own scheduler can fire late or not at all, so the page is not started by a timer set to exact times.
+Instead a small workflow, **Check schedule**, runs every half hour and asks one question: has an update time passed
+in the last `settings.update_window_minutes` without a successful **Publish** run since? If so, it starts
+**Publish**. A late or lost check is simply caught by the next one.
 
 ```yaml
 schedule:
-  - cron: "15 7 * * *"
-    timezone: "Europe/London"
-  - cron: "45 17 * * *"
-    timezone: "Europe/London"
+  - cron: "17 * * * *"
+  - cron: "47 * * * *"
 ```
 
-- Each entry is one run per day. Keep one entry for one run a day, or add more. Each entry has its own timezone, and
-  GitHub follows the clock changes for you.
-- Avoid the start of an hour: GitHub can delay scheduled runs when it is busy, and :00 is the busiest time.
-- **Run now:** *Actions, Publish, Run workflow.*
+- **When:** set the update times in `settings.update_times`, as local times in `settings.timezone`. Clock changes
+  are handled by tested code, not by GitHub. The defaults are 07:15, 12:15, 17:45 and 21:15 UK time.
+- **Delay:** an update starts at the first check after its time, so up to about half an hour late, plus the build.
+- **Failures:** a failed run is retried at the next checks, up to `settings.max_attempts_per_update` times per update
+  time, then it waits for the next update time.
+- **Run now:** *Actions, Publish, Run workflow.* A manual run counts as the update for any update time before it.
+- **What the check thinks:** `GITHUB_REPOSITORY=owner/name python -m plainnews.updates --dry-run` says whether an
+  update is due and why, without starting anything.
+- **Cost:** about 48 short checks a day, each under a minute. Standard runners are free for public repositories, and
+  the checks make no AI calls: only **Publish** does.
+- **Permissions:** the check workflow may start workflows (`actions: write`) and read the repository, nothing else.
+  It uses the built-in token, so there is nothing to create or store.
+- **Avoid the start of an hour** if you change the check times: GitHub can delay scheduled runs when it is busy,
+    and :00 is the busiest time.
 
 ## The AI model
 
@@ -203,7 +217,8 @@ The model is set by `ai.model`, and the key comes from the `GEMINI_API_KEY` secr
 ## Keeping it running
 
 GitHub disables scheduled workflows in a public repository after 60 days without repository activity. Do not
-count on the scheduled runs themselves as activity. The status log warns you when the last commit is older than `settings.commit_warning_days`.
+count on the scheduled runs themselves as activity. It is the **Check schedule** workflow's own schedule that GitHub switches off, and then nothing starts the page. The
+status log warns you when the last commit is older than `settings.commit_warning_days`.
 
 To restart the clock, make any commit. A routine way is to edit the number in the `VERSION` file and push it. The
 page shows that version and the commit date in its status log and footer.
@@ -282,7 +297,7 @@ footer says so, and the headline and links are always there to follow.
 |---|---|
 | The page shows raw headlines only | The key is missing or wrong, the model name is retired, or the free quota ran out. The status log gives the reason. |
 | The deploy job fails | Pages is not set to **GitHub Actions** as its source. |
-| No scheduled runs happen | Workflows are disabled (a fork, or 60 days without activity). Enable them in the **Actions** tab. |
+| The page is not updating | Open the **Check schedule** runs in the **Actions** tab. Each prints its decision. If it never runs, workflows are disabled (a fork, or 60 days without activity): enable them. If it keeps saying an update is not due, check `settings.update_times` and `settings.timezone`. |
 | A source shows HTTP 403 | The publisher blocks cloud servers, or the feed address changed. Try the address in a browser, or replace the source. |
 | A region has no cards | Its sources gave no items newer than `settings.max_age_hours`, or all of them failed. |
 

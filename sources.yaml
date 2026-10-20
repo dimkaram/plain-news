@@ -18,6 +18,9 @@ settings:
   commit_warning_days: 45      # warn on the page when the last commit is older
   default_language: en         # language of sources that do not set one
   stale_after_hours: 24        # flag a source whose newest item is older than this
+  update_times: ["07:15", "12:15", "17:45", "21:15"]   # when the page is refreshed: local times in settings.timezone
+  update_window_minutes: 120   # an update stays due this long after its time, so a late check still catches up
+  max_attempts_per_update: 4   # runs tried for one update time before waiting for the next one
 
 # Order here is the tab order. When a story appears in several regions, the
 # All tab labels it with the first region listed in label_priority.
