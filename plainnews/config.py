@@ -135,7 +135,7 @@ def load_config(path=None) -> Config:
     in_all = _positive_int(errors, "settings.items_in_all", s.get("items_in_all", 15))
     warn_days = _positive_int(errors, "settings.commit_warning_days", s.get("commit_warning_days", 45))
     stale_hours = _positive_int(errors, "settings.stale_after_hours", s.get("stale_after_hours", 24))
-    window = _positive_int(errors, "settings.update_window_minutes", s.get("update_window_minutes", 120))
+    window = _positive_int(errors, "settings.update_window_minutes", s.get("update_window_minutes", 600))
     attempts = _positive_int(errors, "settings.max_attempts_per_update", s.get("max_attempts_per_update", 4))
     update_times = s.get("update_times", list(DEFAULT_UPDATE_TIMES))
     if (not isinstance(update_times, list) or not update_times

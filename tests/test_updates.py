@@ -13,7 +13,8 @@ from zoneinfo import ZoneInfo
 
 from plainnews import updates
 from plainnews.config import ConfigError, load_config
-from plainnews.updates import UpdateError, decide, latest_slot, main, parse_times, run_check, update_slots
+from plainnews.updates import (UpdateError, decide, latest_slot, longest_gap_minutes, main, parse_times, run_check,
+                               update_slots)
 
 LONDON = ZoneInfo("Europe/London")
 TIMES = [time(7, 15), time(12, 15), time(17, 45), time(21, 15)]
@@ -133,9 +134,34 @@ class DecisionTests(unittest.TestCase):
         self.assertFalse(decide(self.now, cfg, [run(utc(2026, 10, 20, 6, 20), conclusion="failure")], LONDON).due)
 
     def test_not_due_outside_every_window(self):
-        result = self.d([], utc(2026, 10, 20, 9, 30))
+        cfg = make_config("update_window_minutes: 120")
+        result = decide(utc(2026, 10, 20, 9, 30), cfg, [], LONDON)                   # 10:30 London, 3h15 after the slot
         self.assertFalse(result.due)
         self.assertIn("no update time passed", result.reason)
+
+    def test_the_default_window_covers_the_longest_gap_so_a_missed_update_never_lapses(self):
+        self.assertEqual(self.cfg.update_window_minutes, 600)
+        self.assertEqual(longest_gap_minutes(parse_times(self.cfg.update_times)), 600)         # 21:15 to 07:15
+        for hour in range(24):                                  # at any hour of the day, with nothing published
+            self.assertTrue(decide(utc(2026, 10, 20, hour, 30), self.cfg, [], LONDON).due, hour)
+
+    def test_the_real_failure_of_20_october_would_now_have_been_caught(self):
+        runs = [run(utc(2026, 10, 20, 6, 54))]                                       # the manual run after the 07:15 update
+        late_noon = decide(utc(2026, 10, 20, 13, 52), self.cfg, runs, LONDON)         # the first check after 12:15, 2h37 late
+        self.assertTrue(late_noon.due)
+        self.assertIn("12:15", late_noon.reason)
+        runs.append(run(utc(2026, 10, 20, 13, 55)))
+        late_evening = decide(utc(2026, 10, 20, 18, 46), self.cfg, runs, LONDON)      # the first check after 17:45, 2h01 late
+        self.assertTrue(late_evening.due)
+        self.assertIn("17:45", late_evening.reason)
+
+    def test_one_check_publishes_once_even_when_several_updates_were_missed(self):
+        runs = [run(utc(2026, 10, 20, 6, 54))]
+        first = decide(utc(2026, 10, 20, 18, 46), self.cfg, runs, LONDON)             # 12:15 and 17:45 both missed
+        self.assertTrue(first.due)
+        self.assertIn("17:45", first.reason)                                          # only the latest one counts
+        runs.append(run(utc(2026, 10, 20, 18, 50)))
+        self.assertFalse(decide(utc(2026, 10, 20, 19, 17), self.cfg, runs, LONDON).due)  # and then it is done
 
     def test_the_times_come_from_the_config(self):
         cfg = make_config('update_times: ["09:00"]')
@@ -148,6 +174,14 @@ class DecisionTests(unittest.TestCase):
             with self.assertRaises(ConfigError, msg=bad):
                 make_config(bad)
         self.assertEqual(make_config().update_times, ("07:15", "12:15", "17:45", "21:15"))
+
+
+class GapTests(unittest.TestCase):
+    def test_longest_gap(self):
+        self.assertEqual(longest_gap_minutes(TIMES), 600)
+        self.assertEqual(longest_gap_minutes([time(7, 0), time(19, 0)]), 720)
+        self.assertEqual(longest_gap_minutes([time(7, 15)]), 1440)
+        self.assertEqual(longest_gap_minutes([time(23, 0), time(1, 0)]), 22 * 60)
 
 
 class GitHubHandler(BaseHTTPRequestHandler):
@@ -250,6 +284,17 @@ class ApiTests(unittest.TestCase):
         for fragment in ("event:      schedule 17 * * * *", "now (UTC):", "now (Europe/London):", "decision:"):
             self.assertIn(fragment, out)
         self.assertNotIn("secret-token", out)
+
+    def test_main_warns_when_the_window_is_shorter_than_the_longest_gap(self):
+        GitHubHandler.runs = []
+        env = {"GITHUB_REPOSITORY": "o/r", "GITHUB_API_URL": self.api}
+        for settings, expect in (("update_window_minutes: 120", True), ("", False)):
+            buffer = io.StringIO()
+            with mock.patch.dict(os.environ, env, clear=False), \
+                    mock.patch("plainnews.updates.load_config", return_value=make_config(settings)), \
+                    contextlib.redirect_stdout(buffer):
+                main(["--dry-run"])
+            self.assertEqual("longest gap" in buffer.getvalue(), expect, settings)
 
     def test_main_needs_a_repository(self):
         with mock.patch.dict(os.environ, {}, clear=True), contextlib.redirect_stdout(io.StringIO()):

@@ -67,6 +67,15 @@ def update_slots(now: datetime, times: list, tz, window_minutes: int) -> list:
     return sorted(slots)
 
 
+def longest_gap_minutes(times: list) -> int:
+    """The longest wait between consecutive update times, counting the wrap from the last one to the first."""
+    minutes = sorted(t.hour * 60 + t.minute for t in times)
+    if len(minutes) < 2:
+        return 1440
+    gaps = [b - a for a, b in zip(minutes, minutes[1:])] + [minutes[0] + 1440 - minutes[-1]]
+    return max(gaps)
+
+
 def latest_slot(now: datetime, times: list, tz, window_minutes: int):
     """The most recent update time that has passed, if it is still within the window; else None."""
     window = timedelta(minutes=window_minutes)
@@ -179,6 +188,10 @@ def main(argv=None) -> int:
     except UpdateError as exc:
         print(f"Check failed: {exc}")
         return 1
+    gap = longest_gap_minutes(parse_times(config.update_times))
+    if config.update_window_minutes < gap:
+        print(f"note:       update_window_minutes ({config.update_window_minutes}) is shorter than the longest gap between "
+              f"update times ({gap}), so a missed update can lapse before the next check arrives")
     print(f"decision:   {decision.reason}")
     if decision.due:
         print("dry run: nothing started" if "--dry-run" in argv else "started the Publish workflow")

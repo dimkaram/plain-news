@@ -90,7 +90,7 @@ when a setting is left out.
 | `settings.stale_after_hours` | `24` | A source whose newest item is older than this is flagged as stale. |
 | `settings.commit_warning_days` | `45` | The status log warns when the last commit is older than this. |
 | `settings.update_times` | `07:15`, `12:15`, `17:45`, `21:15` | When the page should be refreshed, as `HH:MM` times in `settings.timezone`. See [Schedule](#schedule). |
-| `settings.update_window_minutes` | `120` | An update stays due for this long after its time, so a late check still catches up. |
+| `settings.update_window_minutes` | `600` | An update stays due for this long after its time, so a late check still publishes what was missed. Keep it at least as long as the longest gap between your update times (600 minutes for the defaults); `python -m plainnews.updates` warns if it is shorter. |
 | `settings.max_attempts_per_update` | `4` | Runs tried for one update time before waiting for the next one, so a persistent fault cannot flood you with failure emails. |
 
 ### AI settings
@@ -177,7 +177,8 @@ in more than one region.
 GitHub's own scheduler can fire late or not at all, so the page is not started by a timer set to exact times.
 Instead a small workflow, **Check schedule**, runs every half hour and asks one question: has an update time passed
 in the last `settings.update_window_minutes` without a successful **Publish** run since? If so, it starts
-**Publish**. A late or lost check is simply caught by the next one.
+**Publish**. A late or lost check is simply caught by the next one, and at most one update is published per check,
+for the most recent update time.
 
 ```yaml
 schedule:
@@ -187,7 +188,12 @@ schedule:
 
 - **When:** set the update times in `settings.update_times`, as local times in `settings.timezone`. Clock changes
   are handled by tested code, not by GitHub. The defaults are 07:15, 12:15, 17:45 and 21:15 UK time.
-- **Delay:** an update starts at the first check after its time, so up to about half an hour late, plus the build.
+- **Delay:** an update starts at the first check GitHub delivers after its time, plus the build. In practice GitHub
+  has skipped many scheduled runs (gaps of several hours), so updates can arrive hours late. They are reliable, not
+  punctual.
+- **Exact times:** if you need them, start **Publish** from outside GitHub at the chosen times, for example a timer on a
+  machine that is always on, calling the GitHub API with a token limited to running workflows. Keep this check as a
+  safety net.
 - **Failures:** a failed run is retried at the next checks, up to `settings.max_attempts_per_update` times per update
   time, then it waits for the next update time.
 - **Run now:** *Actions, Publish, Run workflow.* A manual run counts as the update for any update time before it.
